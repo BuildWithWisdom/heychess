@@ -20,7 +20,7 @@ export const GameSchema = z.object({
 });
 export type Game = z.infer<typeof GameSchema>;
 
-export const MoveVerdictSchema = z.enum(["best", "good", "inaccuracy", "mistake", "blunder", "brilliant"]);
+export const MoveVerdictSchema = z.enum(["best", "great", "brilliant", "good", "inaccuracy", "mistake", "blunder"]);
 export type MoveVerdict = z.infer<typeof MoveVerdictSchema>;
 
 export const MoveEvalSchema = z.object({

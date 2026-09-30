@@ -67,8 +67,34 @@ async function searchPositions(fens: string[], depth: number): Promise<EvalResul
   return out;
 }
 
-function classify(lossCp: number): MoveVerdict {
-  if (lossCp <= 5) return "best";
+const PIECE_VALS: Record<string, number> = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
+
+function materialScore(fen: string): { w: number; b: number } {
+  const board = fen.split(" ")[0];
+  let w = 0;
+  let b = 0;
+  for (const ch of board) {
+    if (ch === "/") continue;
+    if (/\d/.test(ch)) continue;
+    const lower = ch.toLowerCase();
+    const v = PIECE_VALS[lower] ?? 0;
+    if (ch === lower) b += v;
+    else w += v;
+  }
+  return { w, b };
+}
+
+function classify(lossCp: number, opts?: { sacrifice?: boolean; winMaterial?: boolean; mates?: boolean; keepEvalCp?: number }): MoveVerdict {
+  if (lossCp <= 5) {
+    // Stockfish only gives cp + bestmove. Brilliant/Great are our labels:
+    // brilliant = best move that gives net material (>=2 pawns) but keeps the
+    // position playable. Great = best move that wins net material or mates.
+    // Quiet best moves stay "best". Net-material misses hanging-piece sacs
+    // (piece still on board until captured) — those stay best/great for now.
+    if (opts?.sacrifice && (opts.keepEvalCp ?? 0) >= -50) return "brilliant";
+    if (opts?.mates || opts?.winMaterial) return "great";
+    return "best";
+  }
   if (lossCp < 30) return "good";
   if (lossCp < 80) return "inaccuracy";
   if (lossCp < 180) return "mistake";
@@ -133,12 +159,21 @@ export async function analyzePgn(
       totalLoss += Math.min(loss, ACC_LOSS_CAP);
       counted++;
     }
+    const matBefore = materialScore(fens[i]);
+    const matAfter = materialScore(fens[i + 1]);
+    // Net material from the mover's perspective (captures minus losses).
+    const moverDiff = isWhite
+      ? matAfter.w - matBefore.w - (matAfter.b - matBefore.b)
+      : matAfter.b - matBefore.b - (matAfter.w - matBefore.w);
+    const sacrifice = moverDiff <= -200;
+    const winMaterial = moverDiff >= 200;
+    const mates = actualMover >= 90000;
     evals.push({
       ply: i + 1,
       san: sans[i],
       evalCp: after.cp,
       deltaCp: Math.round(loss),
-      verdict: classify(loss),
+      verdict: classify(loss, { sacrifice, winMaterial, mates, keepEvalCp: actualMover }),
       bestSan: uciToSan(fens[i], before.bestUci),
     });
     probe.move(sans[i]);

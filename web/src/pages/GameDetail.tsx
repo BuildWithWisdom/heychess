@@ -350,7 +350,7 @@ export default function GameDetail() {
     acc === null ? "weak" : acc >= 85 ? "excellent" : acc >= 75 ? "strong" : acc >= 60 ? "good" : "weak";
   const bestUserMove =
     userEvals
-      .filter((e) => e.verdict === "best" || e.verdict === "brilliant")
+      .filter((e) => e.verdict === "best" || e.verdict === "brilliant" || e.verdict === "great")
       .sort((a, b) => swingP(b.ply) - swingP(a.ply))[0] ?? null;
   const biggestSlip =
     userEvals
@@ -395,6 +395,80 @@ export default function GameDetail() {
       : game?.result === "loss"
         ? `You lost this game in ${totalMoveNos} moves.`
         : `You drew this game in ${totalMoveNos} moves.`;
+
+  // ---- Stats tab derivations (all live, from analysis.evals + detail.moves) ----
+  const accForColor = (color: "w" | "b"): number | null => {
+    const ps = (analysis?.evals ?? []).filter((e) => (e.ply % 2 === 1) === (color === "w"));
+    if (ps.length === 0) return null;
+    const avg = ps.reduce((s, e) => s + Math.min(e.deltaCp ?? 0, 300), 0) / ps.length;
+    return Math.max(0, Math.min(100, Math.round(100 - avg / 3)));
+  };
+  const accWhite = accForColor("w");
+  const accBlack = accForColor("b");
+  const qualityOrder = ["brilliant", "great", "best", "good", "inaccuracy", "mistake", "blunder"] as const;
+  const qualityCounts = (() => {
+    const m = new Map<string, number>();
+    for (const e of userEvals) m.set(e.verdict ?? "good", (m.get(e.verdict ?? "good") ?? 0) + 1);
+    return qualityOrder.map((v) => ({ verdict: v, count: m.get(v) ?? 0 }));
+  })();
+  const maxQuality = Math.max(1, ...qualityCounts.map((q) => q.count));
+  const avgCpl =
+    userEvals.length === 0
+      ? null
+      : Math.round(userEvals.reduce((s, e) => s + Math.min(e.deltaCp ?? 0, 1000), 0) / userEvals.length);
+  const mistakeCount = userEvals.filter((e) => e.verdict === "mistake").length;
+  const blunderCount = userEvals.filter((e) => e.verdict === "blunder").length;
+  const phaseAccs = phases.map((ph) => ({ ...ph, acc: phaseAcc(ph.from, ph.to) }));
+  const scoreLabel = (() => {
+    if (!analysis?.userColor) return game?.result === "win" ? "1 – 0" : game?.result === "loss" ? "0 – 1" : "½ – ½";
+    const userWhite = analysis.userColor === "w";
+    if (game?.result === "draw") return "½ – ½";
+    if (game?.result === "win") return userWhite ? "1 – 0" : "0 – 1";
+    return userWhite ? "0 – 1" : "1 – 0";
+  })();
+  const whiteWon = scoreLabel.startsWith("1");
+  const wasDraw = scoreLabel.includes("½");
+  // Piece activity: share of the user's moves per piece (live via chess.js).
+  const pieceActivity = (() => {
+    const counts: Record<string, number> = { q: 0, r: 0, b: 0, n: 0, p: 0 };
+    try {
+      const c = new Chess();
+      if (game?.pgn) c.loadPgn(game.pgn);
+      const hist = c.history({ verbose: true });
+      hist.forEach((h, i) => {
+        const ply = i + 1;
+        if (!isUserP(ply)) return;
+        const pc = (h as { piece?: string }).piece ?? "";
+        if (pc in counts) counts[pc]++;
+      });
+    } catch {
+      // fall through to SAN fallback below
+    }
+    let total = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (total === 0 && detail) {
+      // Fallback: infer pawns from SAN shape when PGN replay fails.
+      for (const m of detail.moves) {
+        const p = (m.ply % 2 === 1) === (analysis?.userColor !== "b");
+        if (!p) continue;
+        const san = m.san;
+        if (/^[a-h][1-8]/.test(san) || /^[a-h]x/.test(san)) counts.p++;
+        else if (san.startsWith("N")) counts.n++;
+        else if (san.startsWith("B")) counts.b++;
+        else if (san.startsWith("R")) counts.r++;
+        else if (san.startsWith("Q")) counts.q++;
+      }
+      total = Object.values(counts).reduce((a, b) => a + b, 0);
+    }
+    const rows = [
+      { key: "Queen", count: counts.q },
+      { key: "Rooks", count: counts.r },
+      { key: "Bishops", count: counts.b },
+      { key: "Knights", count: counts.n },
+      { key: "Pawns", count: counts.p },
+    ].map((r) => ({ ...r, pct: total === 0 ? 0 : Math.round((r.count / total) * 100) }));
+    const max = Math.max(1, ...rows.map((r) => r.count));
+    return rows.map((r) => ({ ...r, width: Math.round((r.count / max) * 100) }));
+  })();
 
   // Summary-tab jumps stay on the summary board (no tab switch).
   // showBest=true previews the engine's best move in place (toggle);
@@ -742,7 +816,121 @@ export default function GameDetail() {
           </div>
         </div>
       )}
-      {game && detail && tab !== "analysis" && tab !== "summary" && (
+      {game && detail && position && tab === "stats" && (
+        <div className="stats-wrap">
+          {analyzing || explaining ? (
+            <div className="detail-card"><p className="muted">Analyzing… engine + coach together.</p></div>
+          ) : !analysis ? (
+            <div className="detail-card"><p className="muted">Pending Stockfish analysis.</p></div>
+          ) : (
+            <>
+              <div className="stats-top">
+                <div className="card-pad">
+                  <strong className="card-title">Accuracy</strong>
+                  <div className="acc-donut-row">
+                    <svg viewBox="0 0 120 120" className="donut">
+                      <circle cx="60" cy="60" r="48" fill="none" stroke="#eef0f4" strokeWidth="12" />
+                      <circle
+                        cx="60" cy="60" r="48" fill="none" stroke="#34c98e" strokeWidth="12"
+                        strokeLinecap="round"
+                        strokeDasharray={`${((analysis.accuracy ?? 0) / 100) * 301.6} 301.6`}
+                        transform="rotate(-90 60 60)"
+                      />
+                      <text x="60" y="58" textAnchor="middle" className="donut-num">{analysis.accuracy}%</text>
+                      <text x="60" y="74" textAnchor="middle" className="donut-sub">Your accuracy</text>
+                    </svg>
+                    <div className="acc-sides">
+                      <div className="acc-side"><span className="dot sm d-open" />{accWhite ?? "—"}%<small>White</small></div>
+                      <div className="acc-side"><span className="dot sm d-mid" />{accBlack ?? "—"}%<small>Black</small></div>
+                    </div>
+                  </div>
+                </div>
+                <div className="card-pad">
+                  <strong className="card-title">Move Quality</strong>
+                  <p className="muted small">Your moves · {userEvals.length} moves</p>
+                  <div className="q-list">
+                    {qualityCounts.map((q) => (
+                      <div className="q-row" key={q.verdict}>
+                        <span className={`dot sm v-${q.verdict === "good" ? "good" : q.verdict === "inaccuracy" ? "inaccuracy" : q.verdict}`} />
+                        <span className="q-label">{q.verdict[0].toUpperCase() + q.verdict.slice(1)}</span>
+                        <div className="bar q-bar"><span style={{ width: `${(q.count / maxQuality) * 100}%` }} /></div>
+                        <span className="q-count">{q.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="card-pad">
+                  <strong className="card-title">Game Result</strong>
+                  <div className="score-big">{scoreLabel}</div>
+                  <p className="muted small">{game.result === "win" ? "Win" : game.result === "loss" ? "Loss" : "Draw"}</p>
+                  <div className="q-list">
+                    <div className="q-row"><span className="dot sm d-open" /><span className="q-label">White</span><div className="bar q-bar"><span style={{ width: `${wasDraw ? 50 : whiteWon ? 100 : 0}%` }} /></div><span className="q-count">{wasDraw ? "½" : whiteWon ? 1 : 0}</span></div>
+                    <div className="q-row"><span className="dot sm d-mid" /><span className="q-label">Draw</span><div className="bar q-bar"><span style={{ width: `${wasDraw ? 100 : 0}%` }} /></div><span className="q-count">{wasDraw ? 1 : 0}</span></div>
+                    <div className="q-row"><span className="dot sm v-blunder" /><span className="q-label">Black</span><div className="bar q-bar"><span style={{ width: `${wasDraw ? 50 : whiteWon ? 0 : 100}%` }} /></div><span className="q-count">{wasDraw ? "½" : whiteWon ? 0 : 1}</span></div>
+                  </div>
+                </div>
+              </div>
+              <div className="stats-mid">
+                <div className="card-pad">
+                  <strong className="card-title">Accuracy by Phase</strong>
+                  <svg viewBox="0 0 400 140" className="phase-chart">
+                    {[0, 25, 50, 75, 100].map((t) => (
+                      <g key={t}>
+                        <line x1="32" y1={120 - t * 1} x2="390" y2={120 - t * 1} stroke="#eef0f4" strokeWidth="1" />
+                        <text x="4" y={123 - t * 1} className="chart-tick">{t}%</text>
+                      </g>
+                    ))}
+                    <polyline
+                      fill="none" stroke="#3b82f6" strokeWidth="2"
+                      points={phaseAccs.map((p, i) => `${70 + i * 130},${120 - (p.acc ?? 0) * 1}`).join(" ")}
+                    />
+                    {phaseAccs.map((p, i) => (
+                      <g key={p.key}>
+                        <circle cx={70 + i * 130} cy={120 - (p.acc ?? 0) * 1} r="4" fill="#3b82f6" />
+                        <text x={70 + i * 130} y="134" textAnchor="middle" className="chart-label">{p.key}</text>
+                        <text x={70 + i * 130} y={108 - (p.acc ?? 0) * 1} textAnchor="middle" className="chart-val">{p.acc ?? "—"}%</text>
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+                <div className="card-pad">
+                  <strong className="card-title">Piece Activity</strong>
+                  <p className="muted small">Share of your moves per piece</p>
+                  <div className="q-list">
+                    {pieceActivity.map((r) => (
+                      <div className="q-row piece-row" key={r.key}>
+                        <span className="q-label piece">{r.key}</span>
+                        <div className="bar q-bar"><span style={{ width: `${r.width}%` }} /></div>
+                        <span className="q-count">{r.pct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="stats-bottom">
+                <div className="card-pad key-stat">
+                  <small className="muted">Avg. centipawn loss (you)</small>
+                  <div className="key-num">{avgCpl ?? "—"}</div>
+                </div>
+                <div className="card-pad key-stat">
+                  <small className="muted">Your mistakes</small>
+                  <div className="key-num">{mistakeCount}</div>
+                </div>
+                <div className="card-pad key-stat">
+                  <small className="muted">Your blunders</small>
+                  <div className="key-num">{blunderCount}</div>
+                </div>
+                <div className="card-pad key-stat">
+                  <small className="muted">Time Control</small>
+                  <div className="key-num tc">{game.timeControl}</div>
+                  <small className="muted">{totalMoveNos} moves</small>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {game && detail && (tab === "openings" || tab === "timeline") && (
         <div className="detail-card">
           <p className="muted">{tab[0].toUpperCase() + tab.slice(1)} lands after engine (1d).</p>
         </div>

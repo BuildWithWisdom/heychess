@@ -142,4 +142,39 @@
   .summary-subcards { grid-template-columns: 1fr; }
   .summary-cards { grid-template-columns: 1fr; }
   .summary-bottom { grid-template-columns: 1fr; }
+  .stats-top, .stats-mid, .stats-bottom { grid-template-columns: 1fr; }
 }
+
+/* ---- Stats tab ---- */
+.stats-wrap { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.stats-top { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 16px; }
+.stats-mid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+.stats-bottom { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 16px; }
+.card-title { font-size: 13.5px; color: #0f1222; }
+.muted.small { font-size: 11.5px; }
+.acc-donut-row { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
+.donut { width: 120px; height: 120px; }
+.donut-num { font-size: 20px; font-weight: 700; fill: #0f1222; }
+.donut-sub { font-size: 9px; fill: #7a8194; }
+.acc-sides { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 700; color: #0f1222; }
+.acc-side { display: flex; align-items: center; gap: 8px; }
+.acc-side small { font-weight: 400; color: #7a8194; }
+.q-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.q-row { display: grid; grid-template-columns: 12px 90px 1fr 30px; gap: 8px; align-items: center; font-size: 12px; color: #343a4d; }
+.q-row.piece-row { grid-template-columns: 70px 1fr 44px; }
+.q-label { text-transform: capitalize; }
+.q-label.piece { text-transform: none; }
+.q-bar { height: 6px; }
+.q-count { text-align: right; font-weight: 600; color: #0f1222; }
+.dot.v-brilliant { background: #14b8a6; }
+.dot.v-great { background: #3b82f6; }
+.dot.v-blunder { background: #dc2626; }
+.dot.v-mistake { background: #f59e0b; }
+.score-big { font-size: 28px; font-weight: 700; color: #0f1222; margin-top: 8px; }
+.phase-chart { width: 100%; height: 150px; margin-top: 8px; }
+.chart-tick { font-size: 9px; fill: #9aa1b5; }
+.chart-label { font-size: 10px; fill: #5b6172; }
+.chart-val { font-size: 10px; font-weight: 700; fill: #0f1222; }
+.key-stat { text-align: left; }
+.key-num { font-size: 22px; font-weight: 700; color: #0f1222; margin-top: 4px; }
+.key-num.tc { font-size: 16px; }
