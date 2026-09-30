@@ -1,0 +1,17 @@
+{
+  "name": "heychess",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "workspaces": [
+    "web",
+    "backend",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=web",
+    "dev:api": "npm run dev --workspace=backend",
+    "dev": "npm run dev --workspace=backend & npm run dev --workspace=web",
+    "build": "npm run build --workspaces"
+  }
+}

@@ -1,0 +1,3 @@
+.app-shell { display: flex; min-height: 100vh; background: #f4f5f7; }
+.content { flex: 1; padding: 28px; max-width: 1200px; }
+.content h1 { margin: 0 0 4px; font-size: 22px; color: #111318; }

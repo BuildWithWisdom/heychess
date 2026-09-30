@@ -1,0 +1,16 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  background: #f4f5f7;
+  color: #111318;
+}
+
+body { margin: 0; background: #f4f5f7; color: #111318; }
+
+#root { min-height: 100vh; }
+
+h1, h2 { color: #111318; }
+p { margin: 0; }
+.muted { color: #6b7280; font-size: 13px; }
+.card { background: #fff; border: 1px solid #e9ebf0; border-radius: 12px; padding: 16px; }
+.error { color: #c03221; font-size: 13px; }
