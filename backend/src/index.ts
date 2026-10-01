@@ -13,6 +13,48 @@ app.use("/*", cors({ origin: ["http://localhost:5173"], credentials: true }));
 
 app.get("/healthz", (c) => c.json({ ok: true, service: "heychess-backend" }));
 
+// Parse [%clk 0:09:58.2] / [0:03:42] / [92.5] -> seconds remaining.
+function parseClkToSecs(raw: string): number | null {
+  const s = raw.trim();
+  if (/^[\d.]+$/.test(s)) {
+    const v = Number(s);
+    return Number.isFinite(v) ? v : null;
+  }
+  const parts = s.split(":").map((p) => p.trim());
+  if (parts.length === 0 || parts.length > 3) return null;
+  const nums = parts.map(Number);
+  if (nums.some((n) => !Number.isFinite(n))) return null;
+  let total = 0;
+  for (const n of nums) total = total * 60 + n;
+  return total;
+}
+
+// Clocks appear in move order in the PGN movetext: 1. e4 {[%clk 0:10:00]} ...
+function extractClocks(pgn: string): number[] {
+  const out: number[] = [];
+  const re = /\[%clk\s+([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(pgn)) !== null) {
+    const v = parseClkToSecs(m[1]);
+    if (v !== null) out.push(v);
+  }
+  return out;
+}
+
+// [TimeControl "600+5"] -> { base: 600, inc: 5 }. Handles "600", "180+2", "-".
+function parseTimeControl(pgn: string): { base: number | null; inc: number } {
+  const m = pgn.match(/\[TimeControl\s+"([^"]+)"\]/);
+  if (!m) return { base: null, inc: 0 };
+  const tc = m[1].trim();
+  if (tc === "-" || tc === "") return { base: null, inc: 0 };
+  const plus = tc.split("+");
+  const base = Number(plus[0]);
+  const inc = plus.length > 1 ? Number(plus[1]) : 0;
+  return {
+    base: Number.isFinite(base) ? base : null,
+    inc: Number.isFinite(inc) ? inc : 0,
+  };
+}
 // Slice 1a: live Chess.com proxy, in-memory, no DB.
 app.get("/api/games", async (c) => {
   const username = (c.req.query("username") ?? "").trim();
@@ -42,6 +84,8 @@ app.post("/api/games/parse", async (c) => {
     const initialFen = new Chess().fen();
     const verbose = chess.history({ verbose: true });
     const replay = new Chess();
+    const clocks = extractClocks(pgn);
+    const { base, inc } = parseTimeControl(pgn);
     const moves = verbose.map((m, i) => {
       replay.move(m.san);
       return {
@@ -50,10 +94,18 @@ app.post("/api/games/parse", async (c) => {
         color: i % 2 === 0 ? "w" : "b",
         san: m.san,
         fen: replay.fen(),
+        // Only attach when the PGN actually carried a clock for this ply.
+        ...(i < clocks.length ? { clockSecs: clocks[i] } : {}),
       };
     });
     const opening = identifyOpening(verbose.map((m) => m.san));
-    return c.json(GameDetailSchema.parse({ initialFen, moves, opening }));
+    return c.json(GameDetailSchema.parse({
+      initialFen,
+      moves,
+      opening,
+      incrementSecs: inc,
+      ...(base !== null ? { baseSecs: base } : {}),
+    }));
   } catch {
     return c.json({ error: "invalid pgn" }, 400);
   }

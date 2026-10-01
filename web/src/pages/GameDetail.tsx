@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
@@ -38,7 +38,12 @@ export default function GameDetail() {
     tookOver.current = true;
   };
   const explainedFor = useRef<string | null>(null);
-  const [tab, setTab] = useState<"analysis" | "summary" | "stats" | "openings" | "timeline">("analysis");
+  const [tab, setTab] = useState<"analysis" | "summary" | "stats" | "opening" | "middlegame" | "endgame" | "tactics" | "timeline">("analysis");
+  // Opening-tab local UI: board cursor inside the opening + full key-move list.
+  const [opPly, setOpPly] = useState<number | null>(null);
+  const [showAllKeyMoves, setShowAllKeyMoves] = useState(false);
+  // Middlegame-tab local UI: board cursor clamped inside the middlegame range.
+  const [midPly, setMidPly] = useState<number | null>(null);
 
   // ONE coach call per analysis run. Engine + LLM resolve before anything
   // renders, so verdicts and commentary appear together — never staged.
@@ -470,6 +475,339 @@ export default function GameDetail() {
     return rows.map((r) => ({ ...r, width: Math.round((r.count / max) * 100) }));
   })();
 
+  // ---- Opening tab derivations (all real: book + engine + clocks, no mocks) ----
+  // Preview state lives here so opening + analysis tabs share it.
+  const [preview, setPreview] = useState<{ ply: number; fen: string } | null>(null);
+  const fmtTime = (secs: number | null): string => {
+    if (secs === null || !Number.isFinite(secs)) return "—";
+    const s = Math.max(0, Math.round(secs));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  const openingFullName = detail?.opening?.name ?? "Unknown Opening";
+  const openingSplit = openingFullName.split(":");
+  const openingMain = openingSplit[0]?.trim() || "Unknown Opening";
+  const openingVarRaw = openingSplit.slice(1).join(":").trim();
+  // Dataset names end in "Variation" ("Najdorf Variation"); the Details row
+  // shows the short form ("Najdorf") like the mock, the header keeps the full name.
+  const openingVarShort = openingVarRaw.replace(/\s+[Vv]ariation$/, "");
+  const bookPly = detail?.opening?.bookPly ?? 0;
+  const bookMoves = Math.ceil(bookPly / 2);
+  // Opening = the opening phase (moves 1..oEnd), same as Stats/Summary,
+  // so Opening Performance matches the Stats chart. Book length only feeds
+  // "Theory followed", not the range.
+  const openingEndPly = Math.min(totalMoves, oEnd * 2);
+  const openingEndMove = oEnd;
+  const openingAccuracy = phaseAcc(1, openingEndMove);
+  const accDelta = openingAccuracy !== null && analysis ? openingAccuracy - analysis.accuracy : null;
+  const openingEvals = (analysis?.evals ?? []).filter((e) => e.ply <= openingEndPly);
+  const openingUserEvals = openingEvals.filter((e) => isUserP(e.ply));
+  const openingUserCount = openingUserEvals.length;
+  const inBook = bookPly > 0;
+  // Time spent from real [%clk] stamps. spent(ply) = prev same-color clock - clock + increment.
+  const clockByPly = new Map((detail?.moves ?? []).map((m) => [m.ply, m.clockSecs ?? null]));
+  const incSecs = detail?.incrementSecs ?? 0;
+  const baseSecs = detail?.baseSecs ?? null;
+  function spentForPly(p: number): number | null {
+    const cur = clockByPly.get(p);
+    if (cur === undefined || cur === null) return null;
+    const prevPly = p - 2;
+    if (prevPly >= 1) {
+      const prev = clockByPly.get(prevPly);
+      if (prev === undefined || prev === null) return null;
+      return Math.max(0, prev - cur + incSecs);
+    }
+    if (baseSecs !== null) return Math.max(0, baseSecs - cur + incSecs);
+    return null;
+  }
+  const openingUserSpent = (() => {
+    let sum = 0;
+    let any = false;
+    for (const e of openingUserEvals) {
+      const s = spentForPly(e.ply);
+      if (s !== null) { sum += s; any = true; }
+    }
+    return any ? sum : null;
+  })();
+  const totalUserSpent = (() => {
+    let sum = 0;
+    let any = false;
+    for (const e of (analysis?.evals ?? []).filter((x) => isUserP(x.ply))) {
+      const s = spentForPly(e.ply);
+      if (s !== null) { sum += s; any = true; }
+    }
+    return any ? sum : null;
+  })();
+  const hasClocks = openingUserSpent !== null || totalUserSpent !== null;
+  // Board cursor for the opening tab (stays inside the opening range).
+  const opCursor = opPly === null ? openingEndPly : Math.max(0, Math.min(opPly, openingEndPly));
+  const opBoardFen = opCursor === 0
+    ? detail?.initialFen
+    : (detail?.moves[opCursor - 1]?.fen ?? detail?.initialFen);
+  const opCursorLabel = opCursor === 0
+    ? "Start"
+    : (() => {
+        const m = detail?.moves[opCursor - 1];
+        return m ? `${m.moveNo}. ${m.san}` : "Start";
+      })();
+  // Key Opening Moves: every pair in the opening range. Real game moves.
+  const keyMovePairs: { no: number; w: string; b?: string }[] = [];
+  if (detail) {
+    const list = detail.moves.slice(0, openingEndPly);
+    for (let i = 0; i < list.length; i += 2) {
+      keyMovePairs.push({ no: list[i].moveNo, w: list[i].san, b: list[i + 1]?.san });
+    }
+  }
+  // Same-piece-twice detection (real, via chess.js verbose history, user moves in opening).
+  const repeatInfo: { san1: string; san2: string } | null = (() => {
+    try {
+      if (!game?.pgn || !detail) return null;
+      const c = new Chess();
+      c.loadPgn(game.pgn);
+      const hist = c.history({ verbose: true }) as unknown as {
+        from: string; to: string; piece: string; san: string; color: string;
+      }[];
+      const userCol = analysis?.userColor ?? ((hist[0]?.color ?? "w") as "w" | "b");
+      let prev: { from: string; to: string; san: string } | null = null;
+      for (let i = 0; i < hist.length && i < openingEndPly; i++) {
+        const h = hist[i];
+        if (h.color !== userCol) continue;
+        if (prev && h.from === prev.to) return { san1: prev.san, san2: h.san };
+        prev = { from: h.from, to: h.to, san: h.san };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  })();
+  // Short one-line feedback, engine + book only.
+  const ouBlunders = openingUserEvals.filter((e) => e.verdict === "blunder").length;
+  const ouMistakes = openingUserEvals.filter((e) => e.verdict === "mistake").length;
+  const ouGood = openingUserEvals.filter((e) =>
+    ["best", "great", "brilliant", "good"].includes(e.verdict ?? "good")).length;
+  const wentWell: string[] = [];
+  const toImprove: string[] = [];
+  if (analysis && detail) {
+    if (bookPly > 0)
+      wentWell.push(`Followed opening theory for the first ${bookMoves} move${bookMoves === 1 ? "" : "s"}.`);
+    if (ouBlunders === 0 && ouMistakes === 0 && openingUserCount > 0)
+      wentWell.push("No blunders or mistakes in the opening.");
+    else if (ouGood > 0 && openingUserCount > 0)
+      wentWell.push(`${ouGood} of ${openingUserCount} moves were best or solid.`);
+    if (repeatInfo) toImprove.push(`Moved the same piece twice (${repeatInfo.san1}–${repeatInfo.san2}).`);
+    const slips = openingUserEvals
+      .filter((e) => e.verdict === "blunder" || e.verdict === "mistake" || e.verdict === "inaccuracy")
+      .sort((a, b) => (b.deltaCp ?? 0) - (a.deltaCp ?? 0));
+    if (slips[0] && slips[0].bestSan && slips[0].bestSan !== slips[0].san)
+      toImprove.push(`Could have played ${slips[0].bestSan} instead of ${slips[0].san}.`);
+    for (const s of slips.slice(toImprove.length === 0 ? 0 : 1, 3)) {
+      if (toImprove.length >= 3) break;
+      toImprove.push(`${moveNoOf(s.ply)}. ${s.san} was a ${s.verdict} (−${((s.deltaCp ?? 0) / 100).toFixed(1)}).`);
+    }
+    if (bookPly > 0 && bookPly < openingEndPly && toImprove.length < 3) {
+      toImprove.push(`Left book at move ${Math.floor(bookPly / 2) + 1}.`);
+    }
+  }
+  // Related Alternatives: best move + actual reply, pill = pawns saved. Real only.
+  const relatedAlts = openingUserEvals
+    .filter((e) => e.bestSan && e.bestSan !== e.san)
+    .slice(0, 2)
+    .map((e) => ({
+      ply: e.ply,
+      best: e.bestSan as string,
+      reply: detail?.moves[e.ply]?.san ?? "",
+      saved: `+${((e.deltaCp ?? 0) / 100).toFixed(1)}`,
+    }));
+  const theoryStatus = !inBook
+    ? { label: "Out of book", cls: "st-out" }
+    : bookPly >= openingEndPly
+      ? { label: "Fully followed", cls: "st-full" }
+      : { label: "Partially followed", cls: "st-part" };
+  // Design format: "1.e4 c5 - 10 moves".
+  const openingRangeText = (() => {
+    if (!detail || openingEndPly === 0) return `1. - ${openingEndMove} moves`;
+    const w1 = detail.moves[0]?.san ?? "";
+    const b1 = detail.moves[1]?.san ?? "";
+    return `1.${w1} ${b1} - ${openingEndMove} moves`;
+  })();
+
+  // ---- Middlegame tab derivations (same sources as opening: engine + clocks, no mocks) ----
+  const midFrom = oEnd + 1;
+  const midTo = mEnd;
+  const midStartPly = Math.min(totalMoves, (midFrom - 1) * 2 + 1);
+  const midEndPly = Math.min(totalMoves, midTo * 2);
+  const midHasRange = detail !== null && midEndPly >= midStartPly && midTo >= midFrom;
+  const midAccuracy = phaseAcc(midFrom, midTo);
+  const midDelta = midAccuracy !== null && analysis ? midAccuracy - analysis.accuracy : null;
+  const midEvals = (analysis?.evals ?? []).filter((e) => e.ply >= midStartPly && e.ply <= midEndPly);
+  const midUserEvals = midEvals.filter((e) => isUserP(e.ply));
+  const midUserCount = midUserEvals.length;
+  const midUserSpent = (() => {
+    let sum = 0;
+    let any = false;
+    for (const e of midUserEvals) {
+      const s = spentForPly(e.ply);
+      if (s !== null) { sum += s; any = true; }
+    }
+    return any ? sum : null;
+  })();
+  const midHasClocks = midUserSpent !== null || totalUserSpent !== null;
+  // Position quality: mean user-perspective eval across the middlegame, in pawns.
+  const userSign = analysis?.userColor === "b" ? -1 : 1;
+  const midPosQuality = (() => {
+    if (midUserEvals.length === 0) return null;
+    const avg = midUserEvals.reduce((s, e) => s + e.evalCp * userSign, 0) / midUserEvals.length;
+    return avg / 100;
+  })();
+  const fmtSignedPawns = (v: number | null): string => {
+    if (v === null || !Number.isFinite(v)) return "—";
+    return `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+  };
+  // Tactical opportunities: real slips + real finds in the middlegame (user moves).
+  const midSlips = midUserEvals
+    .filter((e) => e.verdict === "blunder" || e.verdict === "mistake" || e.verdict === "inaccuracy")
+    .sort((a, b) => (b.deltaCp ?? 0) - (a.deltaCp ?? 0));
+  const midFinds = midUserEvals
+    .filter((e) => e.verdict === "brilliant" || e.verdict === "great" || (e.verdict === "best" && swingP(e.ply) >= 50))
+    .sort((a, b) => swingP(b.ply) - swingP(a.ply));
+  const midTacticalCount = midSlips.length + midFinds.length;
+  // Key Moments: worst 2 slips + best find, chronological. Fill with biggest
+  // absolute swings when the phase is clean.
+  const midKeyMoments: MoveEval[] = (() => {
+    const picked = [...midSlips.slice(0, 2), ...midFinds.slice(0, 1)];
+    if (picked.length < 3) {
+      const pickedSet = new Set(picked.map((e) => e.ply));
+      const rest = midUserEvals
+        .filter((e) => !pickedSet.has(e.ply))
+        .sort((a, b) => Math.abs(swingP(b.ply)) - Math.abs(swingP(a.ply)));
+      for (const e of rest) {
+        if (picked.length >= 3) break;
+        picked.push(e);
+      }
+    }
+    return picked.sort((a, b) => a.ply - b.ply).slice(0, 3);
+  })();
+  const midMomentLabel = (e: MoveEval): string => {
+    const v = e.verdict ?? "good";
+    if (v === "brilliant" || v === "great" || v === "best") return "Strong decision";
+    if (v === "blunder" || v === "mistake") return "Missed opportunity";
+    return "Inaccuracy";
+  };
+  const midWentWell: string[] = [];
+  const midToImprove: string[] = [];
+  if (analysis && detail && midHasRange) {
+    const bl = midUserEvals.filter((e) => e.verdict === "blunder").length;
+    const mi = midUserEvals.filter((e) => e.verdict === "mistake").length;
+    if (bl === 0 && mi === 0 && midUserCount > 0)
+      midWentWell.push(`No blunders or mistakes from moves ${midFrom}–${midTo}.`);
+    if (midFinds.length > 0)
+      midWentWell.push(`Found ${midFinds.length} strong tactic${midFinds.length === 1 ? "" : "s"} in the middlegame.`);
+    else if (midUserCount > 0)
+      midWentWell.push(`${midUserEvals.filter((e) => ["best", "good"].includes(e.verdict ?? "good")).length} of ${midUserCount} middlegame moves were solid.`);
+    if (midPosQuality !== null && midPosQuality >= 0.3)
+      midWentWell.push(`Kept a plus position (avg ${fmtSignedPawns(midPosQuality)}).`);
+    for (const s of midSlips.slice(0, 3)) {
+      const better = s.bestSan && s.bestSan !== s.san ? ` Best was ${moveNoOf(s.ply)}. ${s.bestSan}.` : "";
+      midToImprove.push(`${moveNoOf(s.ply)}. ${s.san} gave up −${((s.deltaCp ?? 0) / 100).toFixed(1)}.${better}`);
+      if (midToImprove.length >= 3) break;
+    }
+    if (midToImprove.length === 0)
+      midToImprove.push("No middlegame slips found — review the endgame instead.");
+  }
+  // Key Middlegame Themes: all derived from engine numbers + move history.
+  const midThemes = (() => {
+    type Tier = { label: string; cls: string };
+    const tier = (ok: boolean, mid: boolean): Tier =>
+      ok ? { label: "Good", cls: "st-full" } : mid ? { label: "Average", cls: "st-part" } : { label: "Needs improvement", cls: "st-bad" };
+    // Central presence: share of user's middlegame moves landing on c/d/e/f files,
+    // ranks 3-6 (real, via chess.js verbose history).
+    let centerPct: number | null = null;
+    let kingMoves = 0;
+    try {
+      if (game?.pgn) {
+        const c = new Chess();
+        c.loadPgn(game.pgn);
+        const hist = c.history({ verbose: true }) as unknown as { to: string; piece: string; color: string }[];
+        const userCol = analysis?.userColor ?? "w";
+        let central = 0;
+        let total = 0;
+        hist.forEach((h, i) => {
+          const p = i + 1;
+          if (p < midStartPly || p > midEndPly) return;
+          if (h.color !== userCol) return;
+          total++;
+          if (h.piece === "k") kingMoves++;
+          const f = h.to.charCodeAt(0) - 97;
+          const r = Number(h.to[1]);
+          if (f >= 2 && f <= 5 && r >= 3 && r <= 6) central++;
+        });
+        if (total > 0) centerPct = (central / total) * 100;
+      }
+    } catch {
+      centerPct = null;
+    }
+    const found = midFinds.length;
+    const missed = midSlips.length;
+    const totalTac = found + missed;
+    const tacRate = totalTac === 0 ? null : found / totalTac;
+    const trendFirst = midEvals.length > 0 ? midEvals[0].evalCp * userSign : null;
+    const trendLast = midEvals.length > 0 ? midEvals[midEvals.length - 1].evalCp * userSign : null;
+    const trendGain = trendFirst !== null && trendLast !== null ? trendLast - trendFirst : null;
+    const midAcc = midAccuracy ?? 0;
+    return [
+      { key: "Center control", icon: "♟", ...tier((centerPct ?? 0) >= 40, (centerPct ?? 0) >= 25), hint: centerPct === null ? undefined : `${Math.round(centerPct)}% central` },
+      { key: "Piece activity", icon: "♞", ...tier(midAcc >= 75, midAcc >= 60) },
+      { key: "King safety", icon: "♚", ...tier(missed === 0 && kingMoves <= 1, missed <= 1 && kingMoves <= 2) },
+      { key: "Tactical awareness", icon: "⛨", ...tier((tacRate ?? 0) >= 0.6, (tacRate ?? 0) >= 0.35 || totalTac === 0) },
+      { key: "Strategic planning", icon: "♜", ...tier((trendGain ?? 0) >= 30, (trendGain ?? -999) >= -60) },
+    ];
+  })();
+  // Position Quality Trend: one sampled point per ~even move across the
+  // middlegame (max 8 dots like the design), user-perspective eval in pawns.
+  const midTrendPts = (() => {
+    const perMove: { ply: number; moveNo: number; v: number }[] = [];
+    for (let mn = midFrom; mn <= midTo; mn++) {
+      const p = Math.min(mn * 2, midEndPly);
+      if (p < midStartPly) continue;
+      const ev = evalByPly.get(p) ?? evalByPly.get(p - 1);
+      if (!ev) continue;
+      perMove.push({ ply: p, moveNo: mn, v: Math.max(-250, Math.min(250, ev.evalCp * userSign)) / 100 });
+    }
+    if (perMove.length <= 8) return perMove;
+    const out: typeof perMove = [];
+    const n = 8;
+    for (let i = 0; i < n; i++) {
+      const idx = Math.round((i / (n - 1)) * (perMove.length - 1));
+      if (!out.includes(perMove[idx])) out.push(perMove[idx]);
+    }
+    return out;
+  })();
+  const midCursor = midPly === null ? midEndPly : Math.max(midStartPly, Math.min(midPly, midEndPly));
+  const midBoardFen = midHasRange
+    ? (detail?.moves[midCursor - 1]?.fen ?? detail?.initialFen)
+    : detail?.initialFen;
+  const midCursorLabel = (() => {
+    const m = detail?.moves[midCursor - 1];
+    return m ? `${m.moveNo}. ${m.san}` : "Start";
+  })();
+  const midWorst = midSlips[0] ?? null;
+  const midCoachText = (() => {
+    if (!analysis) return "Analyzing…";
+    const worstLine = midWorst
+      ? (explanations[midWorst.ply] ?? localNote(midWorst.ply) ?? "").split("\n")[0]
+      : "";
+    const bestLine = midFinds[0]
+      ? (explanations[midFinds[0].ply] ?? localNote(midFinds[0].ply) ?? "").split("\n")[0]
+      : "";
+    const parts: string[] = [];
+    if (bestLine) parts.push(bestLine);
+    if (worstLine && worstLine !== bestLine) parts.push(worstLine);
+    const joined = parts.join(" ").trim();
+    if (joined) return joined.length > 220 ? `${joined.slice(0, 217).trim()}…` : joined;
+    return midUserCount === 0
+      ? "No middlegame moves to review in this game."
+      : "A steady middlegame — step through the key moments above.";
+  })();
+
   // Summary-tab jumps stay on the summary board (no tab switch).
   // showBest=true previews the engine's best move in place (toggle);
   // showBest=false jumps to the game move and clears any preview.
@@ -501,7 +839,6 @@ export default function GameDetail() {
   }
 
   // Show-variation preview: best move played on the board instead of the game move.
-  const [preview, setPreview] = useState<{ ply: number; fen: string } | null>(null);
   const position = preview && preview.ply === ply
     ? preview.fen
     : ply === 0 ? detail?.initialFen : detail?.moves[ply - 1]?.fen;
@@ -573,7 +910,7 @@ export default function GameDetail() {
           </div>
 
           <div className="detail-tabs">
-            {(["analysis", "summary", "stats", "openings", "timeline"] as const).map((t) => (
+            {(["analysis", "summary", "stats", "opening", "middlegame", "endgame", "tactics", "timeline"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -930,7 +1267,343 @@ export default function GameDetail() {
           )}
         </div>
       )}
-      {game && detail && (tab === "openings" || tab === "timeline") && (
+      {game && detail && tab === "opening" && (
+        <div className="opening-wrap">
+          <div className="opening-grid">
+            <div className="op-card">
+              <div className="op-head">
+                <strong>Opening Analysis</strong>
+                <span className="op-meta-pill">
+                  Moves 1–{openingEndMove} <span className="op-sep">✦</span> {hasClocks ? fmtTime(openingUserSpent) : "—"} <span className="op-sep">✦</span> {openingAccuracy ?? "—"}%
+                </span>
+              </div>
+              <div className="op-name-line">
+                {openingMain}{openingVarRaw ? <span className="op-dot"> · </span> : null}
+                {openingVarRaw ? <span className="op-var-inline">{openingVarRaw}</span> : null}
+              </div>
+              <div className="op-mid">
+                <div className="op-board-col">
+                  {opBoardFen && (
+                    <div className="op-board">
+                      <Chessboard options={{
+                        position: opBoardFen,
+                        allowDragging: false,
+                        showNotation: true,
+                        boardOrientation: orientation,
+                        darkSquareStyle: { backgroundColor: "#A5714F" },
+                        lightSquareStyle: { backgroundColor: "#EBD2B1" },
+                        darkSquareNotationStyle: { fontSize: "10px", color: "#5b412f" },
+                        lightSquareNotationStyle: { fontSize: "10px", color: "#8a6a4f" },
+                      }} />
+                    </div>
+                  )}
+                  <div className="op-nav">
+                    <button type="button" onClick={() => setOpPly(0)} disabled={opCursor === 0}>|◀</button>
+                    <button type="button" onClick={() => setOpPly(Math.max(0, opCursor - 1))} disabled={opCursor === 0}>◀</button>
+                    <span className="op-nav-label">{opCursorLabel}</span>
+                    <button type="button" onClick={() => setOpPly(Math.min(openingEndPly, opCursor + 1))} disabled={opCursor === openingEndPly}>▶</button>
+                    <button type="button" onClick={() => setOpPly(openingEndPly)} disabled={opCursor === openingEndPly}>▶|</button>
+                  </div>
+                </div>
+                <div className="op-rightcol">
+                  <div className="op-card-sm">
+                    <div className="op-sec-title">Opening Performance</div>
+                    <div className="op-perf-top">
+                      <svg viewBox="0 0 120 120" className="donut op-donut">
+                        <circle cx="60" cy="60" r="48" fill="none" stroke="#eef0f4" strokeWidth="12" />
+                        <circle
+                          cx="60" cy="60" r="48" fill="none" stroke="#34c98e" strokeWidth="12"
+                          strokeLinecap="round"
+                          strokeDasharray={`${((openingAccuracy ?? 0) / 100) * 301.6} 301.6`}
+                          transform="rotate(-90 60 60)"
+                        />
+                        <text x="60" y="58" textAnchor="middle" className="donut-num">{openingAccuracy ?? "—"}%</text>
+                        <text x="60" y="74" textAnchor="middle" className="donut-sub">Accuracy</text>
+                      </svg>
+                      {accDelta !== null && (
+                        <span className={`op-delta${accDelta < 0 ? " neg" : ""}`}>
+                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1.5v7M1.5 5h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                          {accDelta >= 0 ? `+${accDelta}%` : `${accDelta}%`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="op-stats-box">
+                      <div className="op-stat">
+                        <span className="op-label">Time spent</span>
+                        <span className="op-big">{hasClocks ? fmtTime(openingUserSpent) : "—"}</span>
+                        <span className="op-sub">{hasClocks ? `(of ${fmtTime(totalUserSpent)})` : "(no clock data)"}</span>
+                      </div>
+                      <div className="op-stat">
+                        <span className="op-label">Theory followed</span>
+                        <span className="op-big">{bookMoves} / {openingEndMove}</span>
+                        <span className="op-sub">moves</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="op-card-sm">
+                    <div className="op-sec-title">Key Opening Moves</div>
+                    <div className="op-keymoves">
+                      {(showAllKeyMoves ? keyMovePairs : keyMovePairs.slice(0, 3)).map((p) => (
+                        <Fragment key={p.no}>
+                          <span className="mv-no">{p.no}.</span>
+                          <span className="mv-san">{p.w}</span>
+                          <span className="mv-san">{p.b ?? ""}</span>
+                        </Fragment>
+                      ))}
+                    </div>
+                    {keyMovePairs.length > 3 && (
+                      <div className="op-viewall-row">
+                        <button type="button" className="op-viewall" onClick={() => setShowAllKeyMoves((v) => !v)}>
+                          {showAllKeyMoves ? "Show less" : "View all moves →"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="op-fb">
+                <div className="op-fb-good">
+                  <div className="op-fb-title"><span className="fb-ico ok"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span> What went well</div>
+                  <ul>
+                    {wentWell.map((w, i) => <li key={i}><span className="fb-ico sm ok"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span><span>{w}</span></li>)}
+                    {wentWell.length === 0 && <li className="muted">Analyzing…</li>}
+                  </ul>
+                </div>
+                <div className="op-fb-bad">
+                  <div className="op-fb-title"><span className="fb-ico no"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></span> What could be better</div>
+                  <ul>
+                    {toImprove.map((w, i) => <li key={i}><span className="fb-ico sm no"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></span><span>{w}</span></li>)}
+                    {toImprove.length === 0 && <li className="muted">Analyzing…</li>}
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div className="op-side">
+              <div className="op-side-card">
+                <div className="op-side-title">Opening Details</div>
+                <div className="op-kv"><span>Opening name</span><b>{openingMain}</b></div>
+                <div className="op-kv"><span>Variation</span><b>{openingVarShort || "—"}</b></div>
+                <div className="op-kv"><span>Move range</span><b className="clip">{openingRangeText}</b></div>
+                <div className="op-kv"><span>Theory status</span><span className={`op-pill ${theoryStatus.cls}`}>{theoryStatus.label}</span></div>
+                <div className="op-kv"><span>Book line</span><b>({bookMoves} move{bookMoves === 1 ? "" : "s"})</b></div>
+                <div className="op-kv"><span>Opening accuracy</span><b>{openingAccuracy ?? "—"}%</b></div>
+                <div className="op-kv"><span>Time in opening</span><b>{hasClocks ? fmtTime(openingUserSpent) : "—"}</b></div>
+              </div>
+              <div className="op-side-card">
+                <div className="op-side-title">Related Alternatives</div>
+                {relatedAlts.length === 0 ? (
+                  <p className="muted small">{analysis ? "No engine alternatives in your opening." : "Pending Stockfish analysis."}</p>
+                ) : relatedAlts.map((a) => (
+                  <div className="op-alt" key={a.ply}>
+                    <span className="op-alt-icon">♞</span>
+                    <div className="op-alt-body">
+                      <div className="op-alt-move">{a.best}{a.reply ? ` ${a.reply}` : ""}</div>
+                    </div>
+                    <span className="op-tag">{a.saved}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {game && detail && tab === "middlegame" && (
+        <div className="opening-wrap">
+          <div className="opening-grid">
+            <div className="op-card">
+              <div className="op-head">
+                <strong>Middlegame Analysis</strong>
+                <span className="op-meta-pill">
+                  Moves {midFrom}–{midTo} <span className="op-sep">✦</span> {midHasClocks ? fmtTime(midUserSpent) : "—"} <span className="op-sep">✦</span> {midAccuracy ?? "—"}%
+                </span>
+              </div>
+              <div className="op-name-line">
+                <span className="op-var-inline">The middlegame begins after move {oEnd} and lasts until move {midTo}.</span>
+              </div>
+              <div className="op-mid">
+                <div className="op-board-col">
+                  {midBoardFen && (
+                    <div className="op-board">
+                      <Chessboard options={{
+                        position: midBoardFen,
+                        allowDragging: false,
+                        showNotation: true,
+                        boardOrientation: orientation,
+                        darkSquareStyle: { backgroundColor: "#A5714F" },
+                        lightSquareStyle: { backgroundColor: "#EBD2B1" },
+                        darkSquareNotationStyle: { fontSize: "10px", color: "#5b412f" },
+                        lightSquareNotationStyle: { fontSize: "10px", color: "#8a6a4f" },
+                      }} />
+                    </div>
+                  )}
+                  <div className="op-nav">
+                    <button type="button" onClick={() => setMidPly(midStartPly)} disabled={!midHasRange || midCursor === midStartPly}>|◀</button>
+                    <button type="button" onClick={() => setMidPly(Math.max(midStartPly, midCursor - 1))} disabled={!midHasRange || midCursor === midStartPly}>◀</button>
+                    <span className="op-nav-label">{midCursorLabel}</span>
+                    <button type="button" onClick={() => setMidPly(Math.min(midEndPly, midCursor + 1))} disabled={!midHasRange || midCursor === midEndPly}>▶</button>
+                    <button type="button" onClick={() => setMidPly(midEndPly)} disabled={!midHasRange || midCursor === midEndPly}>▶|</button>
+                  </div>
+                </div>
+                <div className="op-rightcol">
+                  <div className="op-card-sm">
+                    <div className="op-sec-title">Middlegame Performance</div>
+                    <div className="op-perf-top">
+                      <svg viewBox="0 0 120 120" className="donut op-donut">
+                        <circle cx="60" cy="60" r="48" fill="none" stroke="#eef0f4" strokeWidth="12" />
+                        <circle
+                          cx="60" cy="60" r="48" fill="none" stroke="#34c98e" strokeWidth="12"
+                          strokeLinecap="round"
+                          strokeDasharray={`${((midAccuracy ?? 0) / 100) * 301.6} 301.6`}
+                          transform="rotate(-90 60 60)"
+                        />
+                        <text x="60" y="58" textAnchor="middle" className="donut-num">{midAccuracy ?? "—"}%</text>
+                        <text x="60" y="74" textAnchor="middle" className="donut-sub">Accuracy</text>
+                      </svg>
+                      {midDelta !== null && (
+                        <span className={`op-delta${midDelta < 0 ? " neg" : ""}`}>
+                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1.5v7M1.5 5h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                          {midDelta >= 0 ? `+${midDelta}%` : `${midDelta}%`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="op-stats-box three">
+                      <div className="op-stat">
+                        <span className="op-label">Time spent</span>
+                        <span className="op-big">{midHasClocks ? fmtTime(midUserSpent) : "—"}</span>
+                        <span className="op-sub">{midHasClocks ? `(of ${fmtTime(totalUserSpent)})` : "(no clock data)"}</span>
+                      </div>
+                      <div className="op-stat">
+                        <span className="op-label">Position quality</span>
+                        <span className="op-big">{fmtSignedPawns(midPosQuality)}</span>
+                        <span className="op-sub">avg eval</span>
+                      </div>
+                      <div className="op-stat">
+                        <span className="op-label">Tactical opportunities</span>
+                        <span className="op-big">{analysis ? midTacticalCount : "—"}</span>
+                        <span className="op-sub">found + missed</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="op-sec-title">Key Moments</div>
+              {!analysis ? (
+                <p className="muted small">{analyzing || explaining ? "Analyzing…" : "Pending Stockfish analysis."}</p>
+              ) : midKeyMoments.length === 0 ? (
+                <p className="muted small">No middlegame moves to review.</p>
+              ) : (
+                <div className="mid-moments">
+                  {midKeyMoments.map((e) => {
+                    const firstLine = (explanations[e.ply] ?? localNote(e.ply) ?? "").split("\n")[0];
+                    const sw = swingP(e.ply);
+                    const v = e.verdict ?? "good";
+                    const tone = v === "blunder" || v === "mistake" ? "bad" : v === "inaccuracy" ? "warn" : "good";
+                    return (
+                      <div className="mid-moment" key={e.ply}>
+                        <span className={`dot sm v-${v}`} />
+                        <div className="mid-moment-body">
+                          <div className="mid-moment-top">
+                            <span className={`mid-moment-move tone-${tone}`}>Move {moveNoOf(e.ply)} · {midMomentLabel(e)}</span>
+                            <span className={`mid-swing${sw < 0 ? " neg" : ""}`}>
+                              {sw >= 0 ? "+" : ""}{(sw / 100).toFixed(1)}
+                            </span>
+                          </div>
+                          {firstLine && <p className="mid-moment-text">{firstLine}</p>}
+                        </div>
+                        <button type="button" className="op-viewall" onClick={() => setMidPly(e.ply)}>
+                          View position
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="op-fb">
+                <div className="op-fb-good">
+                  <div className="op-fb-title"><span className="fb-ico ok"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span> What you did well</div>
+                  <ul>
+                    {midWentWell.map((w, i) => <li key={i}><span className="fb-ico sm ok"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span><span>{w}</span></li>)}
+                    {midWentWell.length === 0 && <li className="muted">Analyzing…</li>}
+                  </ul>
+                </div>
+                <div className="op-fb-bad">
+                  <div className="op-fb-title"><span className="fb-ico no"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></span> What to improve</div>
+                  <ul>
+                    {midToImprove.map((w, i) => <li key={i}><span className="fb-ico sm no"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></span><span>{w}</span></li>)}
+                    {midToImprove.length === 0 && <li className="muted">Analyzing…</li>}
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div className="op-side">
+              <div className="op-side-card">
+                <div className="op-side-title">Key Middlegame Themes</div>
+                {!analysis ? (
+                  <p className="muted small">{analyzing || explaining ? "Analyzing…" : "Pending Stockfish analysis."}</p>
+                ) : (
+                  <div className="mid-themes">
+                    {midThemes.map((t) => {
+                      const iconTone = t.cls === "st-full" ? "t-good" : t.cls === "st-part" ? "t-mid" : "t-bad";
+                      return (
+                        <div className="mid-theme-row" key={t.key}>
+                          <span className={`mid-theme-icon ${iconTone}`}>{t.icon}</span>
+                          <span className="mid-theme-key">{t.key}</span>
+                          <span className={`op-pill ${t.cls}`}>{t.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="op-side-card">
+                <div className="op-side-title">Position Quality Trend</div>
+                {!analysis || midTrendPts.length === 0 ? (
+                  <p className="muted small">{analyzing || explaining ? "Analyzing…" : "No trend data."}</p>
+                ) : (
+                  <svg viewBox="0 0 260 132" className="mid-trend">
+                    {[-2, 0, 2].map((t) => (
+                      <g key={t}>
+                        <line x1="28" y1={62 - t * 22} x2="252" y2={62 - t * 22} stroke="#eef0f4" strokeWidth="1" />
+                        <text x="6" y={65 - t * 22} className="chart-tick">{t > 0 ? `+${t}` : `${t}`}</text>
+                      </g>
+                    ))}
+                    <polyline
+                      fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
+                      points={midTrendPts.map((p, i) => {
+                        const x = midTrendPts.length === 1 ? 140 : 28 + (i / (midTrendPts.length - 1)) * 224;
+                        const y = 62 - Math.max(-2.4, Math.min(2.4, p.v)) * 22;
+                        return `${x},${y}`;
+                      }).join(" ")}
+                    />
+                    {midTrendPts.map((p, i) => {
+                      const x = midTrendPts.length === 1 ? 140 : 28 + (i / (midTrendPts.length - 1)) * 224;
+                      const y = 62 - Math.max(-2.4, Math.min(2.4, p.v)) * 22;
+                      return <circle key={p.ply} cx={x} cy={y} r="3" fill="#14b8a6" stroke="#fff" strokeWidth="1" />;
+                    })}
+                    {midTrendPts.map((p, i) => {
+                      const x = midTrendPts.length === 1 ? 140 : 28 + (i / (midTrendPts.length - 1)) * 224;
+                      return <text key={p.ply} x={x} y="124" textAnchor="middle" className="chart-label">{p.moveNo}</text>;
+                    })}
+                  </svg>
+                )}
+              </div>
+              <div className="op-side-card mid-coach">
+                <div className="op-side-title">AI Coach</div>
+                <p className="mid-coach-text">{midCoachText}</p>
+                <button
+                  type="button"
+                  className="mid-coach-btn"
+                  disabled={!midWorst}
+                  onClick={() => midWorst && setMidPly(midWorst.ply)}
+                >
+                  Show key position →
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {game && detail && (tab === "endgame" || tab === "tactics" || tab === "timeline") && (
         <div className="detail-card">
           <p className="muted">{tab[0].toUpperCase() + tab.slice(1)} lands after engine (1d).</p>
         </div>

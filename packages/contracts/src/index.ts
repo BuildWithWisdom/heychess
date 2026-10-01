@@ -47,12 +47,16 @@ export const ParsedMoveSchema = z.object({
   color: z.enum(["w", "b"]),
   san: z.string(),
   fen: z.string(),
+  // Remaining clock for the mover AFTER the move, in seconds (from [%clk]).
+  // Absent when the PGN has no clock comments.
+  clockSecs: z.number().optional(),
 });
 export type ParsedMove = z.infer<typeof ParsedMoveSchema>;
 
 export const OpeningInfoSchema = z.object({
   name: z.string(), // e.g. "Sicilian Defense"
   bookPly: z.number(), // plies matching theory; <= this ply is a "book move"
+  eco: z.string().optional(), // e.g. "B94"
 });
 export type OpeningInfo = z.infer<typeof OpeningInfoSchema>;
 
@@ -60,5 +64,10 @@ export const GameDetailSchema = z.object({
   initialFen: z.string(),
   moves: z.array(ParsedMoveSchema),
   opening: OpeningInfoSchema.optional(),
+  // Increment added after each move, in seconds (from [TimeControl "600+5"]).
+  // Used with clockSecs to compute real time spent. Absent when unknown.
+  incrementSecs: z.number().optional(),
+  // Base clock in seconds (the "600" in "600+5"). Needed for first-move timing.
+  baseSecs: z.number().optional(),
 });
 export type GameDetail = z.infer<typeof GameDetailSchema>;
