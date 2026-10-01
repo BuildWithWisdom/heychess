@@ -754,33 +754,19 @@ export default function GameDetail() {
     const trendGain = trendFirst !== null && trendLast !== null ? trendLast - trendFirst : null;
     const midAcc = midAccuracy ?? 0;
     return [
-      { key: "Center control", icon: "♟", ...tier((centerPct ?? 0) >= 40, (centerPct ?? 0) >= 25), hint: centerPct === null ? undefined : `${Math.round(centerPct)}% central` },
-      { key: "Piece activity", icon: "♞", ...tier(midAcc >= 75, midAcc >= 60) },
-      { key: "King safety", icon: "♚", ...tier(missed === 0 && kingMoves <= 1, missed <= 1 && kingMoves <= 2) },
-      { key: "Tactical awareness", icon: "⛨", ...tier((tacRate ?? 0) >= 0.6, (tacRate ?? 0) >= 0.35 || totalTac === 0) },
-      { key: "Strategic planning", icon: "♜", ...tier((trendGain ?? 0) >= 30, (trendGain ?? -999) >= -60) },
+      { key: "Center control", ...tier((centerPct ?? 0) >= 40, (centerPct ?? 0) >= 25), hint: centerPct === null ? undefined : `${Math.round(centerPct)}% central` },
+      { key: "Piece activity", ...tier(midAcc >= 75, midAcc >= 60) },
+      { key: "King safety", ...tier(missed === 0 && kingMoves <= 1, missed <= 1 && kingMoves <= 2) },
+      { key: "Tactical awareness", ...tier((tacRate ?? 0) >= 0.6, (tacRate ?? 0) >= 0.35 || totalTac === 0) },
+      { key: "Strategic planning", ...tier((trendGain ?? 0) >= 30, (trendGain ?? -999) >= -60) },
     ];
   })();
-  // Position Quality Trend: one sampled point per ~even move across the
-  // middlegame (max 8 dots like the design), user-perspective eval in pawns.
-  const midTrendPts = (() => {
-    const perMove: { ply: number; moveNo: number; v: number }[] = [];
-    for (let mn = midFrom; mn <= midTo; mn++) {
-      const p = Math.min(mn * 2, midEndPly);
-      if (p < midStartPly) continue;
-      const ev = evalByPly.get(p) ?? evalByPly.get(p - 1);
-      if (!ev) continue;
-      perMove.push({ ply: p, moveNo: mn, v: Math.max(-250, Math.min(250, ev.evalCp * userSign)) / 100 });
-    }
-    if (perMove.length <= 8) return perMove;
-    const out: typeof perMove = [];
-    const n = 8;
-    for (let i = 0; i < n; i++) {
-      const idx = Math.round((i / (n - 1)) * (perMove.length - 1));
-      if (!out.includes(perMove[idx])) out.push(perMove[idx]);
-    }
-    return out;
-  })();
+  // Position Quality Trend: user-perspective eval per ply across the middlegame.
+  const midTrendPts = midEvals.map((e) => ({
+    ply: e.ply,
+    moveNo: moveNoOf(e.ply),
+    v: Math.max(-250, Math.min(250, e.evalCp * userSign)) / 100,
+  }));
   const midCursor = midPly === null ? midEndPly : Math.max(midStartPly, Math.min(midPly, midEndPly));
   const midBoardFen = midHasRange
     ? (detail?.moves[midCursor - 1]?.fen ?? detail?.initialFen)
@@ -788,24 +774,6 @@ export default function GameDetail() {
   const midCursorLabel = (() => {
     const m = detail?.moves[midCursor - 1];
     return m ? `${m.moveNo}. ${m.san}` : "Start";
-  })();
-  const midWorst = midSlips[0] ?? null;
-  const midCoachText = (() => {
-    if (!analysis) return "Analyzing…";
-    const worstLine = midWorst
-      ? (explanations[midWorst.ply] ?? localNote(midWorst.ply) ?? "").split("\n")[0]
-      : "";
-    const bestLine = midFinds[0]
-      ? (explanations[midFinds[0].ply] ?? localNote(midFinds[0].ply) ?? "").split("\n")[0]
-      : "";
-    const parts: string[] = [];
-    if (bestLine) parts.push(bestLine);
-    if (worstLine && worstLine !== bestLine) parts.push(worstLine);
-    const joined = parts.join(" ").trim();
-    if (joined) return joined.length > 220 ? `${joined.slice(0, 217).trim()}…` : joined;
-    return midUserCount === 0
-      ? "No middlegame moves to review in this game."
-      : "A steady middlegame — step through the key moments above.";
   })();
 
   // Summary-tab jumps stay on the summary board (no tab switch).
@@ -1496,14 +1464,12 @@ export default function GameDetail() {
                   {midKeyMoments.map((e) => {
                     const firstLine = (explanations[e.ply] ?? localNote(e.ply) ?? "").split("\n")[0];
                     const sw = swingP(e.ply);
-                    const v = e.verdict ?? "good";
-                    const tone = v === "blunder" || v === "mistake" ? "bad" : v === "inaccuracy" ? "warn" : "good";
                     return (
                       <div className="mid-moment" key={e.ply}>
-                        <span className={`dot sm v-${v}`} />
+                        <span className={`dot sm v-${e.verdict ?? "good"}`} />
                         <div className="mid-moment-body">
                           <div className="mid-moment-top">
-                            <span className={`mid-moment-move tone-${tone}`}>Move {moveNoOf(e.ply)} · {midMomentLabel(e)}</span>
+                            <span className="mid-moment-move">Move {moveNoOf(e.ply)} · {midMomentLabel(e)}</span>
                             <span className={`mid-swing${sw < 0 ? " neg" : ""}`}>
                               {sw >= 0 ? "+" : ""}{(sw / 100).toFixed(1)}
                             </span>
@@ -1542,16 +1508,12 @@ export default function GameDetail() {
                   <p className="muted small">{analyzing || explaining ? "Analyzing…" : "Pending Stockfish analysis."}</p>
                 ) : (
                   <div className="mid-themes">
-                    {midThemes.map((t) => {
-                      const iconTone = t.cls === "st-full" ? "t-good" : t.cls === "st-part" ? "t-mid" : "t-bad";
-                      return (
-                        <div className="mid-theme-row" key={t.key}>
-                          <span className={`mid-theme-icon ${iconTone}`}>{t.icon}</span>
-                          <span className="mid-theme-key">{t.key}</span>
-                          <span className={`op-pill ${t.cls}`}>{t.label}</span>
-                        </div>
-                      );
-                    })}
+                    {midThemes.map((t) => (
+                      <div className="mid-theme-row" key={t.key}>
+                        <span className="mid-theme-key">{t.key}</span>
+                        <span className={`op-pill ${t.cls}`}>{t.label}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1560,44 +1522,33 @@ export default function GameDetail() {
                 {!analysis || midTrendPts.length === 0 ? (
                   <p className="muted small">{analyzing || explaining ? "Analyzing…" : "No trend data."}</p>
                 ) : (
-                  <svg viewBox="0 0 260 132" className="mid-trend">
+                  <svg viewBox="0 0 260 110" className="mid-trend">
                     {[-2, 0, 2].map((t) => (
                       <g key={t}>
-                        <line x1="28" y1={62 - t * 22} x2="252" y2={62 - t * 22} stroke="#eef0f4" strokeWidth="1" />
-                        <text x="6" y={65 - t * 22} className="chart-tick">{t > 0 ? `+${t}` : `${t}`}</text>
+                        <line x1="24" y1={55 - t * 20} x2="252" y2={55 - t * 20} stroke="#eef0f4" strokeWidth="1" />
+                        <text x="4" y={58 - t * 20} className="chart-tick">{t > 0 ? `+${t}` : `${t}`}</text>
                       </g>
                     ))}
                     <polyline
-                      fill="none" stroke="#14b8a6" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
+                      fill="none" stroke="#34c98e" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
                       points={midTrendPts.map((p, i) => {
-                        const x = midTrendPts.length === 1 ? 140 : 28 + (i / (midTrendPts.length - 1)) * 224;
-                        const y = 62 - Math.max(-2.4, Math.min(2.4, p.v)) * 22;
-                        return `${x},${y}`;
+                        const x = midTrendPts.length === 1 ? 138 : 24 + (i / (midTrendPts.length - 1)) * 228;
+                        return `${x},${55 - p.v * 20}`;
                       }).join(" ")}
                     />
                     {midTrendPts.map((p, i) => {
-                      const x = midTrendPts.length === 1 ? 140 : 28 + (i / (midTrendPts.length - 1)) * 224;
-                      const y = 62 - Math.max(-2.4, Math.min(2.4, p.v)) * 22;
-                      return <circle key={p.ply} cx={x} cy={y} r="3" fill="#14b8a6" stroke="#fff" strokeWidth="1" />;
+                      const x = midTrendPts.length === 1 ? 138 : 24 + (i / (midTrendPts.length - 1)) * 228;
+                      return <circle key={p.ply} cx={x} cy={55 - p.v * 20} r="2.5" fill="#34c98e" />;
                     })}
-                    {midTrendPts.map((p, i) => {
-                      const x = midTrendPts.length === 1 ? 140 : 28 + (i / (midTrendPts.length - 1)) * 224;
-                      return <text key={p.ply} x={x} y="124" textAnchor="middle" className="chart-label">{p.moveNo}</text>;
-                    })}
+                    {[midTrendPts[0], midTrendPts[Math.floor(midTrendPts.length / 4)], midTrendPts[Math.floor(midTrendPts.length / 2)], midTrendPts[Math.floor((midTrendPts.length * 3) / 4)], midTrendPts[midTrendPts.length - 1]]
+                      .filter((p, i, arr) => p && arr.findIndex((q) => q && q.moveNo === p.moveNo) === i)
+                      .map((p) => {
+                        const idx = midTrendPts.findIndex((q) => q.ply === p!.ply);
+                        const x = midTrendPts.length === 1 ? 138 : 24 + (idx / (midTrendPts.length - 1)) * 228;
+                        return <text key={p!.ply} x={x} y="104" textAnchor="middle" className="chart-label">{p!.moveNo}</text>;
+                      })}
                   </svg>
                 )}
-              </div>
-              <div className="op-side-card mid-coach">
-                <div className="op-side-title">AI Coach</div>
-                <p className="mid-coach-text">{midCoachText}</p>
-                <button
-                  type="button"
-                  className="mid-coach-btn"
-                  disabled={!midWorst}
-                  onClick={() => midWorst && setMidPly(midWorst.ply)}
-                >
-                  Show key position →
-                </button>
               </div>
             </div>
           </div>
