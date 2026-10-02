@@ -3,6 +3,8 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
 import type { Game, GameAnalysis, GameDetail as Detail, MoveEval } from "@heychess/contracts";
+import { computePhases, endgameTypeLabel, kingCentralDistance, kingSquare, materialPawnDiff, pawnHealth } from "../utils/phases";
+import { classifyTactic, moverMaterialDiffCp, TACTIC_LEGEND, type TacticType } from "../utils/tactics";
 import "./GameDetail.css";
 
 const API = "http://localhost:3001";
@@ -10,6 +12,16 @@ const QUICK_DEPTH = 10;
 const DEEP_DEPTH = 16;
 // Safety cap per coach call; engine notes cover the rest regardless.
 const MAX_CANDIDATES = 12;
+
+// Name plate shown above/below every board so each side is identified.
+function PlayerBar({ name, color }: { name: string; color: "w" | "b" }) {
+  return (
+    <div className="player-bar">
+      <span className={`player-dot ${color}`}>{name.charAt(0).toUpperCase()}</span>
+      <span className="player-name">{name}</span>
+    </div>
+  );
+}
 
 export default function GameDetail() {
   const { id } = useParams();
@@ -38,12 +50,34 @@ export default function GameDetail() {
     tookOver.current = true;
   };
   const explainedFor = useRef<string | null>(null);
-  const [tab, setTab] = useState<"analysis" | "summary" | "stats" | "opening" | "middlegame" | "endgame" | "tactics" | "timeline">("analysis");
+  const [tab, setTab] = useState<"analysis" | "summary" | "stats" | "opening" | "middlegame" | "endgame" | "tactics">("analysis");
   // Opening-tab local UI: board cursor inside the opening + full key-move list.
   const [opPly, setOpPly] = useState<number | null>(null);
   const [showAllKeyMoves, setShowAllKeyMoves] = useState(false);
   // Middlegame-tab local UI: board cursor clamped inside the middlegame range.
   const [midPly, setMidPly] = useState<number | null>(null);
+  // Endgame-tab local UI: board cursor clamped inside the endgame range.
+  const [endPly, setEndPly] = useState<number | null>(null);
+  // Tactics-tab local UI: inline position preview per row (design has no
+  // permanent board — "View position" expands the row's board).
+  const [tacViewPly, setTacViewPly] = useState<number | null>(null);
+  const [showAllTac, setShowAllTac] = useState(false);
+  // Practice board state for the expanded tactic: null = game position,
+  // otherwise the user's live line. Before/after toggle + flip like other tabs.
+  const [tacPracticeFen, setTacPracticeFen] = useState<string | null>(null);
+  const [tacPracticeMsg, setTacPracticeMsg] = useState("");
+  const [tacBefore, setTacBefore] = useState(false);
+  const [tacFlip, setTacFlip] = useState(false);
+  function openTacPreview(ply: number) {
+    setTacViewPly((v) => {
+      const next = v === ply ? null : ply;
+      // Fresh board every time a row opens.
+      setTacPracticeFen(null);
+      setTacPracticeMsg("");
+      setTacBefore(false);
+      return next;
+    });
+  }
 
   // ONE coach call per analysis run. Engine + LLM resolve before anything
   // renders, so verdicts and commentary appear together — never staged.
@@ -203,6 +237,15 @@ export default function GameDetail() {
   }, [detail, autoPlay, analysis, analyzing, explaining, ply]);
 
   const totalMoves = detail?.moves.length ?? 0;
+  // Real chess phases (book + development for Opening, tapered material
+  // for Endgame). Short mates stay all-Opening; Mid/End can be empty.
+  const phaseBounds = useMemo(
+    () => computePhases(detail?.moves ?? [], detail?.opening?.bookPly ?? 0),
+    [detail]
+  );
+  const oEnd = phaseBounds.oEnd;
+  const mEnd = phaseBounds.mEnd;
+  const totalMoveNos = phaseBounds.totalMoveNos;
 
   const rows = useMemo(() => {
     if (!detail) return [];
@@ -228,10 +271,17 @@ export default function GameDetail() {
     ? `${game.timeControl} · ${new Date(game.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · ${totalMoves} moves`
     : "";
 
-  const third = Math.max(1, Math.ceil(totalMoves / 3));
-  const opening = detail?.moves.slice(0, third) ?? [];
-  const middlegame = detail?.moves.slice(third, third * 2) ?? [];
-  const endgame = detail?.moves.slice(third * 2) ?? [];
+  const openingEndPlyAll = Math.min(totalMoves, oEnd * 2);
+  const midStartPlyAll = oEnd * 2 + 1;
+  const midEndPlyAll = Math.min(totalMoves, mEnd * 2);
+  const endStartPlyAll = mEnd * 2 + 1;
+  const opening = detail?.moves.slice(0, openingEndPlyAll) ?? [];
+  const middlegame = detail && midStartPlyAll <= midEndPlyAll
+    ? detail.moves.slice(midStartPlyAll - 1, midEndPlyAll)
+    : [];
+  const endgame = detail && endStartPlyAll <= totalMoves
+    ? detail.moves.slice(endStartPlyAll - 1)
+    : [];
 
   const worst = analysis
     ? [...analysis.evals].sort((a, b) => (b.deltaCp ?? 0) - (a.deltaCp ?? 0))[0] ?? null
@@ -241,6 +291,15 @@ export default function GameDetail() {
   const orientation = flipped
     ? defaultOrientation === "black" ? "white" : "black"
     : defaultOrientation;
+  // Player names from the PGN headers; fall back to you/opponent.
+  const pgnWhite = game?.pgn?.match(/\[White\s+"([^"]+)"\]/)?.[1];
+  const pgnBlack = game?.pgn?.match(/\[Black\s+"([^"]+)"\]/)?.[1];
+  const whitePlayer = pgnWhite ?? (analysis?.userColor === "w" ? "You" : (game?.opponent ?? "White"));
+  const blackPlayer = pgnBlack ?? (analysis?.userColor === "b" ? "You" : (game?.opponent ?? "Black"));
+  const topPlayer = orientation === "white" ? blackPlayer : whitePlayer;
+  const topColor = orientation === "white" ? "b" : "w";
+  const bottomPlayer = orientation === "white" ? whitePlayer : blackPlayer;
+  const bottomColor = orientation === "white" ? "w" : "b";
   const current = analysis?.evals.find((e) => e.ply === ply) ?? null;
   const shown = current ?? worst;
   const shownIsOpponent = !analysis?.userColor || !shown
@@ -321,7 +380,6 @@ export default function GameDetail() {
   })();
 
   // ---- Summary tab derivations (all local Stockfish math) ----
-  const totalMoveNos = Math.max(1, Math.ceil(totalMoves / 2));
   const evalAfterP = (p: number) => evalByPly.get(p)?.evalCp ?? 0;
   const evalBeforeP = (p: number) => (p <= 1 ? 20 : (evalByPly.get(p - 1)?.evalCp ?? 20));
   const swingP = (p: number) => {
@@ -344,12 +402,12 @@ export default function GameDetail() {
   };
   const phaseLabel = (acc: number | null): string =>
     acc === null ? "—" : acc >= 85 ? "Excellent" : acc >= 75 ? "Strong" : acc >= 60 ? "Good" : "Needs work";
-  const oEnd = Math.max(1, Math.round(totalMoveNos * 0.3));
-  const mEnd = Math.max(oEnd + 1, Math.round(totalMoveNos * 0.7));
+  const phaseSub = (from: number, to: number): string =>
+    from > to ? "(not reached)" : from === 1 ? `(1–${to} moves)` : `(${from}–${to} moves)`;
   const phases = [
-    { key: "Opening", sub: `(1–${oEnd} moves)`, from: 1, to: oEnd, dot: "d-open" },
-    { key: "Middlegame", sub: `(${oEnd + 1}–${mEnd} moves)`, from: oEnd + 1, to: mEnd, dot: "d-mid" },
-    { key: "Endgame", sub: `(${mEnd + 1}–${totalMoveNos} moves)`, from: mEnd + 1, to: totalMoveNos, dot: "d-end" },
+    { key: "Opening", sub: phaseSub(1, oEnd), from: 1, to: oEnd, dot: "d-open" },
+    { key: "Middlegame", sub: phaseSub(oEnd + 1, mEnd), from: oEnd + 1, to: mEnd, dot: "d-mid" },
+    { key: "Endgame", sub: phaseSub(mEnd + 1, totalMoveNos), from: mEnd + 1, to: totalMoveNos, dot: "d-end" },
   ];
   const tierOf = (acc: number | null): string =>
     acc === null ? "weak" : acc >= 85 ? "excellent" : acc >= 75 ? "strong" : acc >= 60 ? "good" : "weak";
@@ -776,6 +834,345 @@ export default function GameDetail() {
     return m ? `${m.moveNo}. ${m.san}` : "Start";
   })();
 
+  // ---- Endgame tab derivations (same sources as opening/mid: engine + clocks + board, no mocks) ----
+  const endFrom = mEnd + 1;
+  const endTo = totalMoveNos;
+  const endStartPly = Math.min(totalMoves, mEnd * 2 + 1);
+  const endEndPly = totalMoves;
+  const endHasRange = detail !== null && totalMoves > 0 && endTo >= endFrom && endStartPly <= endEndPly;
+  const endAccuracy = phaseAcc(endFrom, endTo);
+  const endDelta = endAccuracy !== null && analysis ? endAccuracy - analysis.accuracy : null;
+  const endEvals = (analysis?.evals ?? []).filter((e) => e.ply >= endStartPly && e.ply <= endEndPly);
+  const endUserEvals = endEvals.filter((e) => isUserP(e.ply));
+  const endUserCount = endUserEvals.length;
+  const endUserSpent = (() => {
+    let sum = 0;
+    let any = false;
+    for (const e of endUserEvals) {
+      const s = spentForPly(e.ply);
+      if (s !== null) { sum += s; any = true; }
+    }
+    return any ? sum : null;
+  })();
+  const endHasClocks = endUserSpent !== null || totalUserSpent !== null;
+  // The exact ply the gate fired on (see computePhases), so the label can
+  // never describe a different position than the range.
+  const endGatePly = phaseBounds.endStartMove === null ? null : Math.min(totalMoves, phaseBounds.endStartMove * 2);
+  const endEvalPly = endGatePly ?? endStartPly;
+  const endStartFen = endHasRange && endGatePly !== null ? (detail?.moves[endGatePly - 1]?.fen ?? null) : null;
+  const endFinalFen = endHasRange
+    ? (detail?.moves[endEndPly - 1]?.fen ?? detail?.initialFen)
+    : detail?.initialFen;
+  const endType = endStartFen ? endgameTypeLabel(endStartFen) : null;
+  const endTypeText = endType ? `${endType.type} · ${endType.complexity}` : "—";
+  const endUserCol = (analysis?.userColor ?? "w") as "w" | "b";
+  // Material balance at the endgame start, from the user's perspective.
+  const endBalance = (() => {
+    if (!endStartFen) return { label: "—", cls: "st-part" };
+    const diff = Math.round(materialPawnDiff(endStartFen) * userSign);
+    if (Math.abs(diff) < 1) return { label: "Equal", cls: "st-part" };
+    return diff > 0
+      ? { label: `+${diff} for you`, cls: "st-full" }
+      : { label: `${diff}`, cls: "st-bad" };
+  })();
+  // King activity: centralisation at the end + share of king moves in range.
+  const endKing = (() => {
+    if (!endHasRange || !endFinalFen) return { label: "—", cls: "st-part", moves: 0, sub: "" };
+    let kingMoves = 0;
+    try {
+      if (game?.pgn) {
+        const c = new Chess();
+        c.loadPgn(game.pgn);
+        const hist = c.history({ verbose: true }) as unknown as { to: string; piece: string; color: string }[];
+        hist.forEach((h, i) => {
+          const p = i + 1;
+          if (p < endStartPly || p > endEndPly) return;
+          if (h.color !== endUserCol) return;
+          if (h.piece === "k") kingMoves++;
+        });
+      }
+    } catch {
+      // ignore, centrality below still applies
+    }
+    const central = kingCentralDistance(kingSquare(endFinalFen, endUserCol)) <= 2;
+    const label =
+      kingMoves >= 2 || (central && kingMoves >= 1)
+        ? "Good"
+        : kingMoves >= 1 || central
+          ? "Average"
+          : "Passive";
+    const cls = label === "Good" ? "st-full" : label === "Average" ? "st-part" : "st-bad";
+    return { label, cls, moves: kingMoves, sub: kingMoves === 1 ? "1 king move" : `${kingMoves} king moves` };
+  })();
+  // Pawn structure at the end of the game, user's pawns.
+  const endPawns = (() => {
+    if (!endHasRange || !endFinalFen) return { label: "—", cls: "st-part", sub: "" };
+    const h = pawnHealth(endFinalFen, endUserCol);
+    const weak = h.doubled + h.isolated;
+    const label = weak === 0 ? "Solid" : weak <= 2 ? "Weakened" : "Fragile";
+    const cls = label === "Solid" ? "st-full" : label === "Weakened" ? "st-part" : "st-bad";
+    const sub = h.passed > 0
+      ? `${h.passed} passed`
+      : weak === 0
+        ? "no weaknesses"
+        : `${weak} weak`;
+    return { label, cls, sub };
+  })();
+  // Conversion: one opportunity when the user starts the endgame winning.
+  const endConversion = (() => {
+    if (!analysis || !endHasRange || !endStartFen)
+      return { won: null as number | null, total: 0, label: "—", sub: "" };
+    const startUserEval = userSign * evalAfterP(endEvalPly);
+    const total = startUserEval > 150 ? 1 : 0;
+    if (total === 0) return { won: null, total, label: "—", sub: "never winning" };
+    const won = game?.result === "win" ? 1 : 0;
+    const sub = game?.result === "win" ? "won" : game?.result === "draw" ? "drawn" : "lost";
+    return { won, total, label: `${won} / ${total}`, sub };
+  })();
+  // Simplified theoretical verdict from material + eval (not a tablebase).
+  const endTheory = (() => {
+    if (!endHasRange || !endStartFen) return "—";
+    const diff = materialPawnDiff(endStartFen) * userSign;
+    const ev = userSign * evalAfterP(endEvalPly);
+    if (diff >= 3 || ev >= 300) return "Winning";
+    if (diff <= -3 || ev <= -300) return "Losing";
+    if (Math.abs(diff) <= 1 && Math.abs(ev) < 150) return "Draw";
+    return "Unclear";
+  })();
+  const endSlips = endUserEvals
+    .filter((e) => e.verdict === "blunder" || e.verdict === "mistake" || e.verdict === "inaccuracy")
+    .sort((a, b) => (b.deltaCp ?? 0) - (a.deltaCp ?? 0));
+  const endFinds = endUserEvals
+    .filter((e) => e.verdict === "brilliant" || e.verdict === "great" || (e.verdict === "best" && swingP(e.ply) >= 50))
+    .sort((a, b) => swingP(b.ply) - swingP(a.ply));
+  // Key Moments: worst 2 slips + best find, chronological. Fill with biggest
+  // absolute swings when the phase is clean.
+  const endKeyMoments: MoveEval[] = (() => {
+    const picked = [...endSlips.slice(0, 2), ...endFinds.slice(0, 1)];
+    if (picked.length < 3) {
+      const pickedSet = new Set(picked.map((e) => e.ply));
+      const rest = endUserEvals
+        .filter((e) => !pickedSet.has(e.ply))
+        .sort((a, b) => Math.abs(swingP(b.ply)) - Math.abs(swingP(a.ply)));
+      for (const e of rest) {
+        if (picked.length >= 3) break;
+        picked.push(e);
+      }
+    }
+    return picked.sort((a, b) => a.ply - b.ply).slice(0, 3);
+  })();
+  const endMomentLabel = (e: MoveEval): string => {
+    const v = e.verdict ?? "good";
+    if (v === "blunder" || v === "mistake") return "Missed conversion";
+    if (v === "inaccuracy") return "Inaccuracy";
+    return userSign * e.evalCp >= 150 ? "Winning position" : "Finished well";
+  };
+  const endWentWell: string[] = [];
+  const endToImprove: string[] = [];
+  if (analysis && detail && endHasRange) {
+    const bl = endUserEvals.filter((e) => e.verdict === "blunder").length;
+    const mi = endUserEvals.filter((e) => e.verdict === "mistake").length;
+    if (bl === 0 && mi === 0 && endUserCount > 0)
+      endWentWell.push(`No blunders or mistakes from moves ${endFrom}–${endTo}.`);
+    if (endConversion.total === 1 && endConversion.won === 1)
+      endWentWell.push("Converted the winning endgame.");
+    if (endKing.moves >= 2)
+      endWentWell.push(`Activated the king (${endKing.moves} king moves).`);
+    else if (endUserCount > 0)
+      endWentWell.push(`${endUserEvals.filter((e) => ["best", "good"].includes(e.verdict ?? "good")).length} of ${endUserCount} endgame moves were solid.`);
+    if (endPawns.label === "Solid")
+      endWentWell.push("Kept a solid pawn structure.");
+    for (const s of endSlips.slice(0, 3)) {
+      const better = s.bestSan && s.bestSan !== s.san ? ` Best was ${moveNoOf(s.ply)}. ${s.bestSan}.` : "";
+      endToImprove.push(`${moveNoOf(s.ply)}. ${s.san} gave up −${((s.deltaCp ?? 0) / 100).toFixed(1)}.${better}`);
+      if (endToImprove.length >= 3) break;
+    }
+    if (endToImprove.length === 0)
+      endToImprove.push("No endgame slips found — a clean conversion.");
+  }
+  const endCursor = endPly === null ? endEndPly : Math.max(endStartPly, Math.min(endPly, endEndPly));
+  const endBoardFen = endHasRange
+    ? (detail?.moves[endCursor - 1]?.fen ?? detail?.initialFen)
+    : detail?.initialFen;
+  const endCursorLabel = (() => {
+    const m = detail?.moves[endCursor - 1];
+    return m ? `${m.moveNo}. ${m.san}` : "Start";
+  })();
+
+  // ---- Tactics tab derivations (engine + board geometry, no mocks) ----
+  // Opportunity = a real swing: user miss (blunder/mistake/inaccuracy with
+  // best move and loss >= 60cp) or user find (brilliant/great, or best with
+  // mover swing >= 50cp). Opponent slips are shown separately as context.
+  type TacMoment = {
+    ply: number;
+    moveNo: number;
+    san: string;
+    kind: "missed" | "found";
+    tactic: TacticType;
+    title: string;
+    text: string;
+    deltaCp: number;
+    bestSan?: string;
+  };
+  const fenBeforePly = (p: number): string =>
+    p <= 1 ? (detail?.initialFen ?? "") : (detail?.moves[p - 2]?.fen ?? "");
+  const fenAfterPly = (p: number): string =>
+    detail?.moves[p - 1]?.fen ?? detail?.initialFen ?? "";
+  const tacticOf = (ply: number): TacticType => {
+    const e = evalByPly.get(ply);
+    if (!e || !detail) return "Other";
+    const mover: "w" | "b" = ply % 2 === 1 ? "w" : "b";
+    const fb = fenBeforePly(ply);
+    const fa = fenAfterPly(ply);
+    if (!fb || !fa) return "Other";
+    // For misses, classify the BEST move's idea (what was missed). For finds
+    // and opponent moves, classify the played move.
+    const isMiss = e.verdict === "blunder" || e.verdict === "mistake" || e.verdict === "inaccuracy";
+    const sanForIdea = isMiss && e.bestSan ? e.bestSan : e.san;
+    const moverWhite = mover === "w";
+    const afterCp = e.evalCp;
+    const actualMover = moverWhite ? afterCp : -afterCp;
+    // Material change of the idea move (best move for misses).
+    let matDiff = 0;
+    try {
+      const c = new Chess(fb);
+      const before = c.fen();
+      c.move(sanForIdea);
+      matDiff = moverMaterialDiffCp(before, c.fen(), mover);
+    } catch {
+      matDiff = moverMaterialDiffCp(fb, fa, mover);
+    }
+    return classifyTactic({
+      fenBefore: fb,
+      fenAfter: isMiss && e.bestSan ? (() => {
+        try {
+          const c = new Chess(fb);
+          c.move(e.bestSan as string);
+          return c.fen();
+        } catch {
+          return fa;
+        }
+      })() : fa,
+      san: sanForIdea,
+      mover,
+      moverMaterialDiff: matDiff,
+      keepEvalCp: isMiss ? actualMover + (e.deltaCp ?? 0) : actualMover,
+    }).type;
+  };
+  const tacUserMisses: TacMoment[] = (analysis?.evals ?? [])
+    .filter((e) => isUserP(e.ply))
+    .filter((e) => e.verdict === "blunder" || e.verdict === "mistake" || e.verdict === "inaccuracy")
+    .filter((e) => (e.deltaCp ?? 0) >= 60 && e.bestSan && e.bestSan !== e.san)
+    .sort((a, b) => (b.deltaCp ?? 0) - (a.deltaCp ?? 0))
+    .map((e) => {
+      const tactic = tacticOf(e.ply);
+      const article = tactic === "Other" ? "a tactic" : `a ${tactic.toLowerCase()}`;
+      return {
+        ply: e.ply,
+        moveNo: moveNoOf(e.ply),
+        san: e.san,
+        kind: "missed" as const,
+        tactic,
+        title: `Move ${moveNoOf(e.ply)} · Missed ${tactic === "Other" ? "tactic" : tactic.toLowerCase()}`,
+        text: `You could have played ${moveNoOf(e.ply)}. ${e.bestSan} instead of ${e.san} (${article}, −${((e.deltaCp ?? 0) / 100).toFixed(1)}).`,
+        deltaCp: e.deltaCp ?? 0,
+        bestSan: e.bestSan,
+      };
+    });
+  const tacUserFinds: TacMoment[] = (analysis?.evals ?? [])
+    .filter((e) => isUserP(e.ply))
+    .filter((e) => e.verdict === "brilliant" || e.verdict === "great" || (e.verdict === "best" && swingP(e.ply) >= 50))
+    .sort((a, b) => swingP(b.ply) - swingP(a.ply))
+    .map((e) => {
+      const tactic = tacticOf(e.ply);
+      const v = e.verdict ?? "best";
+      const title = v === "brilliant" || v === "great"
+        ? `Move ${moveNoOf(e.ply)} · Strong ${tactic === "Other" ? "tactic" : tactic.toLowerCase()}`
+        : `Move ${moveNoOf(e.ply)} · You found the ${tactic === "Other" ? "tactic" : tactic.toLowerCase()}`;
+      const text = v === "brilliant"
+        ? `Brilliant ${e.san} — you gave material and kept the initiative.`
+        : v === "great"
+          ? `Excellent calculation! ${moveNoOf(e.ply)}. ${e.san} wins material.`
+          : `Well played ${moveNoOf(e.ply)}. ${e.san} — the engine's top choice.`;
+      return {
+        ply: e.ply,
+        moveNo: moveNoOf(e.ply),
+        san: e.san,
+        kind: "found" as const,
+        tactic,
+        title,
+        text,
+        deltaCp: e.deltaCp ?? 0,
+      };
+    });
+  // Your tactics only — opponent moves never count here.
+  const tacAllMine: TacMoment[] = [...tacUserMisses, ...tacUserFinds].sort((a, b) => a.ply - b.ply);
+  const tacTotal = tacAllMine.length;
+  const tacMissed = tacUserMisses.length;
+  const tacFound = tacUserFinds.length;
+  const tacRate = tacTotal === 0 ? null : Math.round((tacFound / tacTotal) * 100);
+  // Displayed list is capped at the 8 most significant moments (worst
+  // misses + biggest finds), chronological for reading. Types + donut
+  // describe exactly this displayed Top 8 — labels below say so.
+  const tacImpact = (m: TacMoment): number =>
+    m.kind === "missed" ? m.deltaCp : swingP(m.ply);
+  const tacMoments: TacMoment[] = [...tacAllMine]
+    .sort((a, b) => tacImpact(b) - tacImpact(a))
+    .slice(0, 8)
+    .sort((a, b) => a.ply - b.ply);
+  const tacShowing = tacMoments.length;
+  const tacTypeCounts = TACTIC_LEGEND.map((t) => ({
+    type: t,
+    count: tacMoments.filter((m) => m.tactic === t).length,
+  }));
+  const tacDonutTotal = Math.max(1, tacShowing);
+  const tacDonutColors: Record<string, string> = {
+    "Fork": "#3b82f6",
+    "Pin": "#22a35c",
+    "Skewer": "#14b8a6",
+    "Discovered attack": "#f59e0b",
+    "Sacrifice": "#ef4444",
+    "Double check": "#8b5cf6",
+    "Deflection": "#ec4899",
+    "Other": "#cbd5e1",
+  };
+  // SVG donut segments for tactic types.
+  const tacSegments = (() => {
+    const R = 48;
+    const C = 2 * Math.PI * R;
+    let acc = 0;
+    const segs: { type: string; dash: string; offset: number; color: string }[] = [];
+    for (const row of tacTypeCounts) {
+      if (row.count === 0) continue;
+      const frac = row.count / tacDonutTotal;
+      segs.push({
+        type: row.type,
+        dash: `${frac * C} ${C}`,
+        offset: -acc * C,
+        color: tacDonutColors[row.type] ?? "#94a3b8",
+      });
+      acc += frac;
+    }
+    return { C, segs };
+  })();
+  const tacInsight = (() => {
+    if (!analysis) return "";
+    if (tacTotal === 0) return "No clear tactical swings in this game — it was decided positionally. Keep scanning for forcing moves every turn.";
+    // "Mostly X" reflects all your moments, not just the displayed Top 8.
+    const fullCounts = TACTIC_LEGEND.map((t) => ({
+      type: t,
+      count: tacAllMine.filter((m) => m.tactic === t).length,
+    }));
+    const byType = [...fullCounts].sort((a, b) => b.count - a.count).filter((x) => x.count > 0);
+    const topTypes = byType.slice(0, 2).map((x) => `${x.type.toLowerCase()}s`).join(" and ");
+    const vision = (tacRate ?? 0) >= 60 ? "Your tactical vision is good" : "Your tactical vision needs work";
+    const missedBit = tacMissed === 0
+      ? "you converted everything you found"
+      : `you missed ${tacMissed} tactical opportunit${tacMissed === 1 ? "y" : "ies"}${topTypes ? `, mostly ${topTypes}` : ""}`;
+    return `${vision}, but ${missedBit}. ${tacMissed > 0 ? "Check for forcing moves before making a quiet move." : "Keep punishing loose pieces the same way."}`;
+  })();
+  // Practice card removed per design — missed moments are reviewed inline.
+
   // Summary-tab jumps stay on the summary board (no tab switch).
   // showBest=true previews the engine's best move in place (toggle);
   // showBest=false jumps to the game move and clears any preview.
@@ -878,7 +1275,7 @@ export default function GameDetail() {
           </div>
 
           <div className="detail-tabs">
-            {(["analysis", "summary", "stats", "opening", "middlegame", "endgame", "tactics", "timeline"] as const).map((t) => (
+            {(["analysis", "summary", "stats", "opening", "middlegame", "endgame", "tactics"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -916,7 +1313,9 @@ export default function GameDetail() {
             </div>
 
             <div className="board-col">
+              <PlayerBar name={topPlayer} color={topColor} />
               <Chessboard options={{ position, allowDragging: false, boardOrientation: orientation }} />
+              <PlayerBar name={bottomPlayer} color={bottomColor} />
               <div className="board-nav">
                 <button type="button" onClick={() => setPly(0)} disabled={ply === 0}>|◀</button>
                 <button type="button" onClick={() => setPly((p) => Math.max(0, p - 1))} disabled={ply === 0}>◀</button>
@@ -1027,7 +1426,9 @@ export default function GameDetail() {
         <div className="summary-wrap">
           <div className="summary-grid">
             <div className="card-pad summary-board">
+              <PlayerBar name={topPlayer} color={topColor} />
               <Chessboard options={{ position, allowDragging: false, boardOrientation: orientation }} />
+              <PlayerBar name={bottomPlayer} color={bottomColor} />
               <div className="board-nav">
                 <button type="button" onClick={() => setPly(0)} disabled={ply === 0}>|◀</button>
                 <button type="button" onClick={() => setPly((p) => Math.max(0, p - 1))} disabled={ply === 0}>◀</button>
@@ -1251,6 +1652,7 @@ export default function GameDetail() {
               </div>
               <div className="op-mid">
                 <div className="op-board-col">
+                  <PlayerBar name={topPlayer} color={topColor} />
                   {opBoardFen && (
                     <div className="op-board">
                       <Chessboard options={{
@@ -1260,11 +1662,10 @@ export default function GameDetail() {
                         boardOrientation: orientation,
                         darkSquareStyle: { backgroundColor: "#A5714F" },
                         lightSquareStyle: { backgroundColor: "#EBD2B1" },
-                        darkSquareNotationStyle: { fontSize: "10px", color: "#5b412f" },
-                        lightSquareNotationStyle: { fontSize: "10px", color: "#8a6a4f" },
                       }} />
                     </div>
                   )}
+                  <PlayerBar name={bottomPlayer} color={bottomColor} />
                   <div className="op-nav">
                     <button type="button" onClick={() => setOpPly(0)} disabled={opCursor === 0}>|◀</button>
                     <button type="button" onClick={() => setOpPly(Math.max(0, opCursor - 1))} disabled={opCursor === 0}>◀</button>
@@ -1290,7 +1691,7 @@ export default function GameDetail() {
                       </svg>
                       {accDelta !== null && (
                         <span className={`op-delta${accDelta < 0 ? " neg" : ""}`}>
-                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1.5v7M1.5 5h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d={accDelta < 0 ? "M1.5 5h7" : "M5 1.5v7M1.5 5h7"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                           {accDelta >= 0 ? `+${accDelta}%` : `${accDelta}%`}
                         </span>
                       )}
@@ -1382,14 +1783,19 @@ export default function GameDetail() {
               <div className="op-head">
                 <strong>Middlegame Analysis</strong>
                 <span className="op-meta-pill">
-                  Moves {midFrom}–{midTo} <span className="op-sep">✦</span> {midHasClocks ? fmtTime(midUserSpent) : "—"} <span className="op-sep">✦</span> {midAccuracy ?? "—"}%
+                  {midHasRange ? `Moves ${midFrom}–${midTo}` : "Not reached"} <span className="op-sep">✦</span> {midHasClocks ? fmtTime(midUserSpent) : "—"} <span className="op-sep">✦</span> {midAccuracy ?? "—"}%
                 </span>
               </div>
               <div className="op-name-line">
-                <span className="op-var-inline">The middlegame begins after move {oEnd} and lasts until move {midTo}.</span>
+                {midHasRange ? (
+                  <span className="op-var-inline">The middlegame begins after move {oEnd} and lasts until move {midTo}.</span>
+                ) : (
+                  <span className="op-var-inline">No middlegame — the game ended in the opening.</span>
+                )}
               </div>
               <div className="op-mid">
                 <div className="op-board-col">
+                  <PlayerBar name={topPlayer} color={topColor} />
                   {midBoardFen && (
                     <div className="op-board">
                       <Chessboard options={{
@@ -1399,11 +1805,10 @@ export default function GameDetail() {
                         boardOrientation: orientation,
                         darkSquareStyle: { backgroundColor: "#A5714F" },
                         lightSquareStyle: { backgroundColor: "#EBD2B1" },
-                        darkSquareNotationStyle: { fontSize: "10px", color: "#5b412f" },
-                        lightSquareNotationStyle: { fontSize: "10px", color: "#8a6a4f" },
                       }} />
                     </div>
                   )}
+                  <PlayerBar name={bottomPlayer} color={bottomColor} />
                   <div className="op-nav">
                     <button type="button" onClick={() => setMidPly(midStartPly)} disabled={!midHasRange || midCursor === midStartPly}>|◀</button>
                     <button type="button" onClick={() => setMidPly(Math.max(midStartPly, midCursor - 1))} disabled={!midHasRange || midCursor === midStartPly}>◀</button>
@@ -1429,7 +1834,7 @@ export default function GameDetail() {
                       </svg>
                       {midDelta !== null && (
                         <span className={`op-delta${midDelta < 0 ? " neg" : ""}`}>
-                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1.5v7M1.5 5h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d={midDelta < 0 ? "M1.5 5h7" : "M5 1.5v7M1.5 5h7"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                           {midDelta >= 0 ? `+${midDelta}%` : `${midDelta}%`}
                         </span>
                       )}
@@ -1554,9 +1959,372 @@ export default function GameDetail() {
           </div>
         </div>
       )}
-      {game && detail && (tab === "endgame" || tab === "tactics" || tab === "timeline") && (
-        <div className="detail-card">
-          <p className="muted">{tab[0].toUpperCase() + tab.slice(1)} lands after engine (1d).</p>
+      {game && detail && tab === "endgame" && (
+        <div className="opening-wrap">
+          <div className="opening-grid">
+            <div className="op-card">
+              <div className="op-head">
+                <strong>Endgame Analysis</strong>
+                <span className="op-meta-pill">
+                  {endHasRange ? `Moves ${endFrom}–${endTo}` : "Not reached"} <span className="op-sep">✦</span> {endHasClocks ? fmtTime(endUserSpent) : "—"} <span className="op-sep">✦</span> {endAccuracy ?? "—"}%
+                </span>
+              </div>
+              <div className="op-name-line">
+                {endHasRange ? (
+                  <span className="op-var-inline">{endTypeText}</span>
+                ) : (
+                  <span className="op-var-inline">No endgame — the game ended before the endgame.</span>
+                )}
+              </div>
+              <div className="op-mid">
+                <div className="op-board-col">
+                  <PlayerBar name={topPlayer} color={topColor} />
+                  {endBoardFen && (
+                    <div className="op-board">
+                      <Chessboard options={{
+                        position: endBoardFen,
+                        allowDragging: false,
+                        showNotation: true,
+                        boardOrientation: orientation,
+                        darkSquareStyle: { backgroundColor: "#A5714F" },
+                        lightSquareStyle: { backgroundColor: "#EBD2B1" },
+                      }} />
+                    </div>
+                  )}
+                  <PlayerBar name={bottomPlayer} color={bottomColor} />
+                  <div className="op-nav">
+                    <button type="button" onClick={() => setEndPly(endStartPly)} disabled={!endHasRange || endCursor === endStartPly}>|◀</button>
+                    <button type="button" onClick={() => setEndPly(Math.max(endStartPly, endCursor - 1))} disabled={!endHasRange || endCursor === endStartPly}>◀</button>
+                    <span className="op-nav-label">{endCursorLabel}</span>
+                    <button type="button" onClick={() => setEndPly(Math.min(endEndPly, endCursor + 1))} disabled={!endHasRange || endCursor === endEndPly}>▶</button>
+                    <button type="button" onClick={() => setEndPly(endEndPly)} disabled={!endHasRange || endCursor === endEndPly}>▶|</button>
+                  </div>
+                </div>
+                <div className="op-rightcol">
+                  <div className="op-card-sm">
+                    <div className="op-sec-title">Endgame Performance</div>
+                    <div className="op-perf-top">
+                      <svg viewBox="0 0 120 120" className="donut op-donut">
+                        <circle cx="60" cy="60" r="48" fill="none" stroke="#eef0f4" strokeWidth="12" />
+                        <circle
+                          cx="60" cy="60" r="48" fill="none" stroke="#34c98e" strokeWidth="12"
+                          strokeLinecap="round"
+                          strokeDasharray={`${((endAccuracy ?? 0) / 100) * 301.6} 301.6`}
+                          transform="rotate(-90 60 60)"
+                        />
+                        <text x="60" y="58" textAnchor="middle" className="donut-num">{endAccuracy ?? "—"}%</text>
+                        <text x="60" y="74" textAnchor="middle" className="donut-sub">Accuracy</text>
+                      </svg>
+                      {endDelta !== null && (
+                        <span className={`op-delta${endDelta < 0 ? " neg" : ""}`}>
+                          <svg viewBox="0 0 10 10" aria-hidden="true"><path d={endDelta < 0 ? "M1.5 5h7" : "M5 1.5v7M1.5 5h7"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                          {endDelta >= 0 ? `+${endDelta}%` : `${endDelta}%`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="op-stats-box three">
+                      <div className="op-stat">
+                        <span className="op-label">Conversion rate</span>
+                        <span className="op-big">{analysis ? endConversion.label : "—"}</span>
+                        <span className="op-sub">{endConversion.sub || "converted"}</span>
+                      </div>
+                      <div className="op-stat">
+                        <span className="op-label">King activity</span>
+                        <span className="op-big">{endKing.label}</span>
+                        <span className="op-sub">{endKing.sub || "endgame king"}</span>
+                      </div>
+                      <div className="op-stat">
+                        <span className="op-label">Pawn structure</span>
+                        <span className="op-big">{endPawns.label}</span>
+                        <span className="op-sub">{endPawns.sub || "pawns"}</span>
+                      </div>
+                    </div>
+                    <div className="op-kv"><span>Time in endgame</span><b>{endHasClocks ? `${fmtTime(endUserSpent)} (of ${fmtTime(totalUserSpent)})` : "—"}</b></div>
+                  </div>
+                </div>
+              </div>
+              <div className="op-sec-title">Key Moments</div>
+              {!analysis ? (
+                <p className="muted small">{analyzing || explaining ? "Analyzing…" : "Pending Stockfish analysis."}</p>
+              ) : !endHasRange ? (
+                <p className="muted small">No endgame moves to review.</p>
+              ) : endKeyMoments.length === 0 ? (
+                <p className="muted small">No endgame moves to review.</p>
+              ) : (
+                <div className="mid-moments">
+                  {endKeyMoments.map((e) => {
+                    const firstLine = (explanations[e.ply] ?? localNote(e.ply) ?? "").split("\n")[0];
+                    const sw = swingP(e.ply);
+                    return (
+                      <div className="mid-moment" key={e.ply}>
+                        <span className={`dot sm v-${e.verdict ?? "good"}`} />
+                        <div className="mid-moment-body">
+                          <div className="mid-moment-top">
+                            <span className="mid-moment-move">Move {moveNoOf(e.ply)} · {endMomentLabel(e)}</span>
+                            <span className={`mid-swing${sw < 0 ? " neg" : ""}`}>
+                              {sw >= 0 ? "+" : ""}{(sw / 100).toFixed(1)}
+                            </span>
+                          </div>
+                          {firstLine && <p className="mid-moment-text">{firstLine}</p>}
+                        </div>
+                        <button type="button" className="op-viewall" onClick={() => setEndPly(e.ply)}>
+                          View position
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="op-fb">
+                <div className="op-fb-good">
+                  <div className="op-fb-title"><span className="fb-ico ok"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span> What you did well</div>
+                  <ul>
+                    {endWentWell.map((w, i) => <li key={i}><span className="fb-ico sm ok"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></span><span>{w}</span></li>)}
+                    {endWentWell.length === 0 && <li className="muted">Analyzing…</li>}
+                  </ul>
+                </div>
+                <div className="op-fb-bad">
+                  <div className="op-fb-title"><span className="fb-ico no"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></span> What to improve</div>
+                  <ul>
+                    {endToImprove.map((w, i) => <li key={i}><span className="fb-ico sm no"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></span><span>{w}</span></li>)}
+                    {endToImprove.length === 0 && <li className="muted">Analyzing…</li>}
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div className="op-side">
+              <div className="op-side-card">
+                <div className="op-side-title">Endgame Details</div>
+                <div className="op-kv"><span>Endgame type</span><b>{endType?.type ?? "—"}</b></div>
+                <div className="op-kv"><span>Material balance</span><span className={`op-pill ${endBalance.cls}`}>{endBalance.label}</span></div>
+                <div className="op-kv"><span>King activity</span><span className={`op-pill ${endKing.cls}`}>{endKing.label}</span></div>
+                <div className="op-kv"><span>Pawn structure</span><span className={`op-pill ${endPawns.cls}`}>{endPawns.label}</span></div>
+                <div className="op-kv"><span>Conversion rate</span><b>{analysis ? endConversion.label : "—"}</b></div>
+                <div className="op-kv"><span>Theoretical result</span><b>{endTheory}</b></div>
+                <div className="op-kv"><span>Endgame accuracy</span><b>{endAccuracy ?? "—"}%</b></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {game && detail && tab === "tactics" && (
+        <div className="opening-wrap tac-wrap">
+          <div className="opening-grid tac-grid">
+            <div className="op-card tac-main">
+              <div className="tac-head">
+                <strong>Tactics Analysis</strong>
+                <p className="tac-sub">Your key tactical moments — your misses and finds only.</p>
+              </div>
+              <div className="tac-stats">
+                <div className="tac-stat">
+                  <span className="op-label">Total tactical opportunities</span>
+                  <span className="tac-stat-num">{analysis ? tacTotal : "—"}</span>
+                </div>
+                <div className="tac-stat">
+                  <span className="op-label">You missed</span>
+                  <span className="tac-stat-num miss">{analysis ? tacMissed : "—"}</span>
+                </div>
+                <div className="tac-stat">
+                  <span className="op-label">You found</span>
+                  <span className="tac-stat-num hit">{analysis ? tacFound : "—"}</span>
+                </div>
+                <div className="tac-stat rate">
+                  <span className="op-label">Tactic success rate</span>
+                  <span className="tac-stat-num">{tacRate === null ? "—" : `${tacRate}%`}</span>
+                </div>
+              </div>
+              <div className="op-sec-title tac-list-title">
+                Tactical Moments
+                {analysis && tacTotal > tacShowing && (
+                  <span className="muted small"> · Top {tacShowing} of {tacTotal} your moments</span>
+                )}
+              </div>
+              {!analysis ? (
+                <p className="muted small">{analyzing || explaining ? "Analyzing… engine + coach together." : "Pending Stockfish analysis."}</p>
+              ) : tacMoments.length === 0 ? (
+                <p className="muted small">No sharp tactical swings — a clean positional game. Review the timeline for the biggest eval changes.</p>
+              ) : (
+                <div className="tac-list">
+                  {(showAllTac ? tacMoments : tacMoments.slice(0, 4)).map((m) => (
+                    <div key={m.ply}>
+                      <div className="tac-row">
+                        <span className={`fb-ico ${m.kind === "missed" ? "no" : "ok"}`}>
+                          {m.kind === "missed" ? (
+                            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2 8 8 M8 2 2 8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                          ) : (
+                            <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.6 5.3 3.9 7.6 8.4 2.6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                          )}
+                        </span>
+                        <div className="tac-row-body">
+                          <div className="tac-row-title">
+                            <span className="tac-move">Move {m.moveNo}</span>
+                            <span className={`tac-kind ${m.kind === "missed" ? "k-miss" : "k-hit"}`}>
+                              {m.kind === "missed"
+                                ? `Missed ${m.tactic === "Other" ? "tactic" : m.tactic.toLowerCase()}`
+                                : (m.title.replace(`Move ${m.moveNo} · `, ""))}
+                            </span>
+                          </div>
+                          <p className="tac-row-text">{m.text}</p>
+                        </div>
+                        <span className={`tac-pill ${m.kind === "missed" ? "p-miss" : "p-hit"}`}>{m.tactic}</span>
+                        <button
+                          type="button"
+                          className="op-viewall tac-view"
+                          onClick={() => openTacPreview(m.ply)}
+                        >
+                          {tacViewPly === m.ply ? "Hide" : "View position"}
+                        </button>
+                      </div>
+                      {tacViewPly === m.ply && (() => {
+                        const baseFen = tacBefore ? fenBeforePly(m.ply) : fenAfterPly(m.ply);
+                        const boardFen = tacPracticeFen ?? baseFen;
+                        const tacOrientation = tacFlip
+                          ? (orientation === "white" ? "black" : "white")
+                          : orientation;
+                        const tacTop = tacFlip ? bottomPlayer : topPlayer;
+                        const tacTopColor = tacFlip ? bottomColor : topColor;
+                        const tacBottom = tacFlip ? topPlayer : bottomPlayer;
+                        const tacBottomColor = tacFlip ? topColor : bottomColor;
+                        const expectedSan = m.kind === "missed" ? (m.bestSan ?? m.san) : m.san;
+                        const norm = (s: string) => s.replace(/[+#?!]+$/, "").trim();
+                        return (
+                        <div className="tac-preview">
+                          <div className="tac-board-col">
+                            <PlayerBar name={tacTop} color={tacTopColor} />
+                            <div className="tac-board">
+                              <Chessboard options={{
+                                position: boardFen,
+                                allowDragging: true,
+                                showNotation: true,
+                                boardOrientation: tacOrientation,
+                                darkSquareStyle: { backgroundColor: "#A5714F" },
+                                lightSquareStyle: { backgroundColor: "#EBD2B1" },
+                                onPieceDrop: ({ sourceSquare, targetSquare }) => {
+                                  if (!sourceSquare || !targetSquare) return false;
+                                  try {
+                                    const c = new Chess(boardFen);
+                                    const mv = c.move({ from: sourceSquare, to: targetSquare, promotion: "q" });
+                                    const firstTry = !tacPracticeFen && !tacBefore
+                                      ? false
+                                      : !tacPracticeFen;
+                                    setTacPracticeFen(c.fen());
+                                    if (firstTry) {
+                                      if (norm(mv.san) === norm(expectedSan)) {
+                                        setTacPracticeMsg(`Correct! ${m.moveNo}. ${mv.san} is the tactic.`);
+                                      } else {
+                                        setTacPracticeMsg(`Not quite — the idea was ${m.moveNo}. ${expectedSan}. Reset to try again.`);
+                                      }
+                                    }
+                                    return true;
+                                  } catch {
+                                    return false;
+                                  }
+                                },
+                              }} />
+                            </div>
+                            <PlayerBar name={tacBottom} color={tacBottomColor} />
+                            <div className="op-nav tac-nav">
+                              <button type="button" title="Position before the move" onClick={() => { setTacBefore(true); setTacPracticeFen(null); setTacPracticeMsg(""); }} disabled={tacBefore && !tacPracticeFen}>|◀</button>
+                              <button type="button" title="Position after the move" onClick={() => { setTacBefore(false); setTacPracticeFen(null); setTacPracticeMsg(""); }} disabled={!tacBefore && !tacPracticeFen}>▶|</button>
+                              <button type="button" title="Flip board" onClick={() => setTacFlip((f) => !f)}>⇄</button>
+                              <button type="button" title="Reset to game position" onClick={() => { setTacPracticeFen(null); setTacPracticeMsg(""); setTacBefore(false); }}>⟳</button>
+                            </div>
+                          </div>
+                          <div className="tac-preview-side">
+                            <div className="tac-preview-move">{m.moveNo}. {m.san}</div>
+                            {m.bestSan && m.kind === "missed" && (
+                              <div className="muted small">Best was {m.moveNo}. {m.bestSan}</div>
+                            )}
+                            <div className="muted small">
+                              {tacPracticeFen
+                                ? "Your line — drag to keep trying."
+                                : tacBefore
+                                  ? `Position before ${m.moveNo}. ${m.san} — your move.`
+                                  : (detail.moves[m.ply - 1] ? `Position after ${m.moveNo}. ${detail.moves[m.ply - 1].san}` : "")}
+                            </div>
+                            {tacPracticeMsg && <div className="tac-feedback">{tacPracticeMsg}</div>}
+                            <div className="tac-actions">
+                              <button
+                                type="button"
+                                className="op-viewall"
+                                onClick={() => { setTacBefore(true); setTacPracticeFen(null); setTacPracticeMsg("Your move — find the tactic."); }}
+                              >
+                                Practice this →
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        );
+                      })()}
+                    </div>
+                  ))}
+                  {tacMoments.length > 4 && (
+                    <div className="op-viewall-row">
+                      <button type="button" className="op-viewall" onClick={() => setShowAllTac((v) => !v)}>
+                        {showAllTac ? "Show less" : `Show all ${tacMoments.length} moments →`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="op-side">
+              <div className="op-side-card">
+                <div className="op-side-title">
+                  Tactic Types
+                  {analysis && tacTotal > tacShowing && (
+                    <span className="muted small"> · Top {tacShowing}</span>
+                  )}
+                </div>
+                {!analysis ? (
+                  <p className="muted small">{analyzing || explaining ? "Analyzing…" : "Pending Stockfish analysis."}</p>
+                ) : (
+                  <div className="tac-types">
+                    {tacTotal > tacShowing && (
+                      <p className="muted small">Top {tacShowing} of your {tacTotal} moments by impact.</p>
+                    )}
+                    <div className="tac-donut-wrap">
+                      <svg viewBox="0 0 120 120" className="donut tac-donut">
+                        <circle cx="60" cy="60" r="48" fill="none" stroke="#eef0f4" strokeWidth="14" />
+                        {tacSegments.segs.map((s) => (
+                          <circle
+                            key={s.type}
+                            cx="60" cy="60" r="48" fill="none"
+                            stroke={s.color} strokeWidth="14"
+                            strokeDasharray={s.dash}
+                            strokeDashoffset={s.offset}
+                            transform="rotate(-90 60 60)"
+                            strokeLinecap="butt"
+                          />
+                        ))}
+                        <text x="60" y="66" textAnchor="middle" className="donut-num">{tacMoments.length}</text>
+                      </svg>
+                    </div>
+                    <div className="tac-legend">
+                      {tacTypeCounts.map((row) => (
+                        <div className="tac-legend-row" key={row.type}>
+                          <span className="tac-legend-left">
+                            <span className="tac-swatch" style={{ background: tacDonutColors[row.type] ?? "#94a3b8" }}>
+                              {row.type === "Fork" ? "✕" : row.type === "Pin" ? "●" : row.type === "Skewer" ? "◐" : row.type === "Discovered attack" ? "◎" : row.type === "Sacrifice" ? "♞" : row.type === "Double check" ? "+" : row.type === "Deflection" ? "⇄" : "○"}
+                            </span>
+                            <span className={row.count === 0 ? "muted" : ""}>{row.type}</span>
+                          </span>
+                          <span className="q-count">{row.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="tac-insight">
+            <span className="tac-insight-ico">◈</span>
+            <div>
+              <div className="tac-insight-title">Tactics insight</div>
+              <p className="tac-insight-text">{analysis ? tacInsight : "Analyzing…"}</p>
+            </div>
+          </div>
         </div>
       )}
     </section>
