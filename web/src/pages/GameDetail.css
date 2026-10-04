@@ -337,3 +337,21 @@
   .tac-row { flex-wrap: wrap; }
   .tac-preview { flex-direction: column; }
 }
+
+/* Skeleton loader: same containers as the analysis tab so the shape matches.
+   Shown only while the game parses / stored analysis loads. */
+.sk {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef0f4 25%, #e0e4ec 50%, #eef0f4 75%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes sk-shimmer {
+  to { background-position: -200% 0; }
+}
+.sk-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; }
+.sk-board { width: 100%; aspect-ratio: 1 / 1; border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .sk { animation: none; }
+}

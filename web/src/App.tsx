@@ -1,25 +1,55 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar.tsx";
 import Home from "./pages/Home.tsx";
 import Games from "./pages/Games.tsx";
 import GameDetail from "./pages/GameDetail.tsx";
 import Insights from "./pages/Insights.tsx";
 import Progress from "./pages/Progress.tsx";
+import Login from "./pages/Login.tsx";
+import Onboarding from "./pages/Onboarding.tsx";
+import { authClient } from "./lib/auth-client.ts";
 import "./App.css";
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const { data: session, isPending } = authClient.useSession();
+  const location = useLocation();
+  if (isPending) return <div className="app-shell">Loading…</div>;
+  if (!session) return <Navigate to="/login" state={{ from: location }} replace />;
+  return <>{children}</>;
+}
+
+function Shell() {
+  return (
+    <div className="app-shell">
+      <RequireAuth>
+        <Sidebar />
+        <main className="content">
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/games" element={<Games />} />
+            <Route path="/games/:id" element={<GameDetail />} />
+            <Route path="/insights" element={<Insights />} />
+            <Route path="/progress" element={<Progress />} />
+          </Routes>
+        </main>
+      </RequireAuth>
+    </div>
+  );
+}
 
 export default function App() {
   return (
-    <div className="app-shell">
-      <Sidebar />
-      <main className="content">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/games" element={<Games />} />
-          <Route path="/games/:id" element={<GameDetail />} />
-          <Route path="/insights" element={<Insights />} />
-          <Route path="/progress" element={<Progress />} />
-        </Routes>
-      </main>
-    </div>
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/welcome"
+        element={
+          <RequireAuth>
+            <Onboarding />
+          </RequireAuth>
+        }
+      />
+      <Route path="/*" element={<Shell />} />
+    </Routes>
   );
 }

@@ -4,12 +4,14 @@ import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
 import type { Game, GameAnalysis, GameDetail as Detail, MoveEval } from "@heychess/contracts";
 import { computePhases, endgameTypeLabel, kingCentralDistance, kingSquare, materialPawnDiff, pawnHealth } from "../utils/phases";
+import { gameAccuracyFromEvals } from "../utils/accuracy";
+import { updateCachedAccuracy } from "../utils/gamesCache";
 import { classifyTactic, moverMaterialDiffCp, TACTIC_LEGEND, type TacticType } from "../utils/tactics";
 import "./GameDetail.css";
 
 const API = "http://localhost:3001";
-const QUICK_DEPTH = 10;
-const DEEP_DEPTH = 16;
+// Single depth: quick was inflating accuracy, so every game runs deep.
+const QUICK_DEPTH = 16;
 // Safety cap per coach call; engine notes cover the rest regardless.
 const MAX_CANDIDATES = 12;
 
@@ -40,7 +42,6 @@ export default function GameDetail() {
   const [ply, setPly] = useState(0);
   const [error, setError] = useState("");
   const [takeaways, setTakeaways] = useState<string[]>([]);
-  const [depthUsed, setDepthUsed] = useState<number | null>(null);
   const [autoPlay, setAutoPlay] = useState(true);
   // User took manual control of the board: stop autoplay AND don't yank the
   // board to the worst move when analysis lands.
@@ -88,12 +89,12 @@ export default function GameDetail() {
     setAnalyzing(true);
     setExplaining(false);
     setExplainError("");
-    setDepthUsed(depth);
     try {
       const ar = await fetch(`${API}/api/games/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pgn: g.pgn, depth, username: "aguowisdom" }),
+        credentials: "include",
+        body: JSON.stringify({ pgn: g.pgn, depth, gameId: g.id }),
       });
       const aj: GameAnalysis = await ar.json();
       if (!ar.ok) throw new Error((aj as unknown as { error?: string }).error ?? "analysis failed");
@@ -146,6 +147,7 @@ export default function GameDetail() {
           const er = await fetch(`${API}/api/analyze/explain-game`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            credentials: "include",
             body: JSON.stringify({
               moves: notable.map((e) => ({
                 moveNo: Math.floor((e.ply - 1) / 2) + 1,
@@ -160,6 +162,7 @@ export default function GameDetail() {
               accuracy: aj.accuracy,
               result: g.result,
               opponent: g.opponent,
+              gameId: g.id,
             }),
           });
           const ej = await er.json();
@@ -173,7 +176,9 @@ export default function GameDetail() {
       // Reveal together: verdicts + commentary land in the same paint.
       setAnalysis(aj);
       setExplanations(notes);
-      setDepthUsed(depth);
+      // Write-through to the list cache so /games shows the new accuracy
+      // immediately when going back (revalidation confirms it from Turso).
+      updateCachedAccuracy(g.id, aj.accuracy);
       setAutoPlay(false);
     } catch (e) {
       setExplainError(e instanceof Error ? e.message : "analysis failed");
@@ -182,21 +187,19 @@ export default function GameDetail() {
     }
   }
 
-  async function runDeep() {
-    if (!game || !detail || analyzing || explaining) return;
-    explainedFor.current = null;
-    tookOver.current = false;
-    setAnalysis(null);
-    await runCoaching(game, detail, DEEP_DEPTH);
-  }
-
   useEffect(() => {
     async function run() {
       try {
+        // List rows carry no PGN (keeps the full list light). Fetch the one
+        // game with PGN whenever navigation state doesn't have it.
         let g = stateGame;
-        if (!g) {
-          const list = await (await fetch(`${API}/api/games?username=aguowisdom&limit=20`)).json();
-          g = list.games.find((x: Game) => x.id === id) ?? null;
+        if (!g?.pgn) {
+          const one = await (
+            await fetch(`${API}/api/games/one?id=${encodeURIComponent(id ?? "")}`, {
+              credentials: "include",
+            })
+          ).json().catch(() => null);
+          g = one?.game ?? null;
         }
         if (!g?.pgn) throw new Error("game not found");
         setGame(g);
@@ -208,13 +211,39 @@ export default function GameDetail() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "parse failed");
         setDetail(data);
-        // Start at move 1 and autoplay through the game while engine+coach
-        // work in the background — no frozen empty board.
         setPly(0);
-        setAutoPlay(true);
         tookOver.current = false;
-        // Quick analysis auto-runs. Deep analysis is user-triggered.
-        await runCoaching(g, data, QUICK_DEPTH);
+        // Stored first: an analyzed game serves evals + notes from Turso
+        // instantly. Only unanalyzed (or shallow) games run the engine.
+        // Rows shallower than depth 16 are re-run (old quick-10 formula).
+        let served = false;
+        try {
+          const sr = await fetch(`${API}/api/games/analysis?gameId=${encodeURIComponent(g.id)}`, {
+            credentials: "include",
+          });
+          if (sr.ok) {
+            const sj = await sr.json();
+            const sa = sj.game as GameAnalysis;
+            if (sa && Array.isArray(sa.evals) && sa.evals.length > 0 && (sa.depth ?? 0) >= QUICK_DEPTH) {
+              setAnalysis({ gameId: sa.gameId, evals: sa.evals, accuracy: sa.accuracy, userColor: sa.userColor });
+              const storedNotes: Record<number, string> = {};
+              for (const [k, v] of Object.entries(sa.notes ?? {})) storedNotes[Number(k)] = String(v);
+              setExplanations(storedNotes);
+              setTakeaways(Array.isArray(sa.takeaways) ? sa.takeaways.map(String) : []);
+              updateCachedAccuracy(g.id, sa.accuracy);
+              setAutoPlay(false);
+              served = true;
+            }
+          }
+        } catch {
+          // Fall through to a fresh analysis.
+        }
+        if (!served) {
+          // Start at move 1 and autoplay through the game while engine+coach
+          // work in the background — no frozen empty board.
+          setAutoPlay(true);
+          await runCoaching(g, data, QUICK_DEPTH);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "load failed");
       }
@@ -397,8 +426,7 @@ export default function GameDetail() {
       return m >= fromMove && m <= toMove;
     });
     if (ps.length === 0) return null;
-    const avg = ps.reduce((s, e) => s + Math.min(e.deltaCp ?? 0, 300), 0) / ps.length;
-    return Math.max(0, Math.min(100, Math.round(100 - avg / 3)));
+    return gameAccuracyFromEvals(ps);
   };
   const phaseLabel = (acc: number | null): string =>
     acc === null ? "—" : acc >= 85 ? "Excellent" : acc >= 75 ? "Strong" : acc >= 60 ? "Good" : "Needs work";
@@ -463,8 +491,7 @@ export default function GameDetail() {
   const accForColor = (color: "w" | "b"): number | null => {
     const ps = (analysis?.evals ?? []).filter((e) => (e.ply % 2 === 1) === (color === "w"));
     if (ps.length === 0) return null;
-    const avg = ps.reduce((s, e) => s + Math.min(e.deltaCp ?? 0, 300), 0) / ps.length;
-    return Math.max(0, Math.min(100, Math.round(100 - avg / 3)));
+    return gameAccuracyFromEvals(ps);
   };
   const accWhite = accForColor("w");
   const accBlack = accForColor("b");
@@ -1237,7 +1264,50 @@ export default function GameDetail() {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {!detail && !error && <p className="muted">Loading game…</p>}
+      {!detail && !error && (
+        <div className="detail-card" aria-busy="true" aria-label="Loading game">
+          <div className="detail-head">
+            <div className="detail-title">
+              <span className="sk sk-avatar" />
+              <div>
+                <div className="sk sk-line" style={{ width: 180, height: 15, marginBottom: 8 }} />
+                <div className="sk sk-line" style={{ width: 240, height: 11 }} />
+              </div>
+            </div>
+            <div className="sk sk-line" style={{ width: 120, height: 32, borderRadius: 8 }} />
+          </div>
+
+          <div className="detail-tabs" aria-hidden="true">
+            {["Analysis", "Summary", "Stats", "Openings", "Middlegame", "Endgame", "Tactics"].map((t) => (
+              <span key={t} className="sk sk-line" style={{ width: t.length * 7 + 12, height: 12 }} />
+            ))}
+          </div>
+
+          <div className="detail-grid">
+            <div className="moves-col" aria-hidden="true">
+              {Array.from({ length: 14 }, (_, i) => (
+                <div className="sk sk-line" key={i} style={{ height: 22, margin: "0 0 8px", opacity: 1 - i * 0.05 }} />
+              ))}
+            </div>
+            <div className="board-col" aria-hidden="true">
+              <div className="sk sk-line" style={{ width: 140, height: 13, margin: "6px 2px" }} />
+              <div className="sk sk-board" />
+              <div className="sk sk-line" style={{ width: 140, height: 13, margin: "6px 2px" }} />
+              <div className="sk sk-line" style={{ height: 30, marginTop: 8, borderRadius: 8 }} />
+            </div>
+            <div className="eval-col" aria-hidden="true">
+              <div className="sk sk-line" style={{ width: "45%", height: 14, marginBottom: 10 }} />
+              <div className="sk sk-line" style={{ width: "30%", height: 13, marginBottom: 12 }} />
+              <div className="sk sk-line" style={{ height: 12, marginBottom: 8 }} />
+              <div className="sk sk-line" style={{ height: 12, marginBottom: 8 }} />
+              <div className="sk sk-line" style={{ width: "70%", height: 12, marginBottom: 14 }} />
+              <div className="sk sk-line" style={{ width: "35%", height: 13, marginBottom: 10 }} />
+              <div className="sk sk-line" style={{ height: 12, marginBottom: 8 }} />
+              <div className="sk sk-line" style={{ width: "80%", height: 12 }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {game && detail && position && (
         <div className="detail-card">
@@ -1255,19 +1325,6 @@ export default function GameDetail() {
               </div>
             </div>
             <div className="detail-actions">
-              <button
-                type="button"
-                className="btn-light"
-                onClick={runDeep}
-                disabled={analyzing || explaining || depthUsed === DEEP_DEPTH}
-                title={`Re-run Stockfish at depth ${DEEP_DEPTH} for stronger verdicts`}
-              >
-                {analyzing || explaining
-                  ? "Analyzing…"
-                  : depthUsed === DEEP_DEPTH
-                    ? `Deep ✓ (d${DEEP_DEPTH})`
-                    : `Deep analysis (d${DEEP_DEPTH})`}
-              </button>
               <button type="button" className="btn-light" disabled title="Journal comes later">
                 ⎙ Save to Journal
               </button>
@@ -1341,9 +1398,7 @@ export default function GameDetail() {
               </div>
               {(analyzing || explaining) && (
                 <p className="muted">
-                  {depthUsed === DEEP_DEPTH
-                    ? `Deep analysis (depth ${DEEP_DEPTH}) — engine + coach together…`
-                    : `Quick analysis (depth ${QUICK_DEPTH}) — engine + coach together…`}
+                  {`Analysis (depth ${QUICK_DEPTH}) — engine + coach together…`}
                 </p>
               )}
               {!analyzing && !explaining && shown && (

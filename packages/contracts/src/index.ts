@@ -5,6 +5,16 @@ import { z } from "zod";
 export const GameResultSchema = z.enum(["win", "loss", "draw"]);
 export type GameResult = z.infer<typeof GameResultSchema>;
 
+export const PlayerStatsSchema = z.object({
+  username: z.string(),
+  totalGames: z.number(),
+  wins: z.number(),
+  losses: z.number(),
+  draws: z.number(),
+  winRate: z.number(), // 0-100
+});
+export type PlayerStats = z.infer<typeof PlayerStatsSchema>;
+
 export const GameSourceSchema = z.enum(["chesscom", "lichess", "pgn"]);
 export type GameSource = z.infer<typeof GameSourceSchema>;
 
@@ -38,6 +48,12 @@ export const GameAnalysisSchema = z.object({
   evals: z.array(MoveEvalSchema),
   accuracy: z.number().min(0).max(100),
   userColor: z.enum(["w", "b"]).optional(),
+  // Stored-analysis extras: engine depth + coach output, so a game opened
+  // twice is served from Turso instead of re-run.
+  depth: z.number().optional(),
+  notes: z.record(z.string(), z.string()).optional(),
+  takeaways: z.array(z.string()).optional(),
+  summary: z.string().optional(),
 });
 export type GameAnalysis = z.infer<typeof GameAnalysisSchema>;
 

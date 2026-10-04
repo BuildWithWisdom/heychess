@@ -122,6 +122,36 @@ function parsePgnSide(pgn: string, username?: string): "w" | "b" | null {
   return null;
 }
 
+// Win% + move accuracy, same model as Lichess (public) and close to
+// chess.com CAPS2. Linear "100 - avgLoss/3" inflated scores ~10pts because
+// one blunder hid among good moves; the harmonic blend below punishes it.
+export function winPercent(cp: number): number {
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1);
+}
+
+// actualMoverCp = post-move eval from the mover's perspective (cp, white-pov
+// converted), lossCp = best - actual (>= 0). Returns 0-100.
+export function moveAccuracy(actualMoverCp: number, lossCp: number): number {
+  const best = actualMoverCp + Math.max(0, lossCp);
+  const wb = winPercent(best);
+  const wa = winPercent(actualMoverCp);
+  if (wa >= wb) return 100;
+  const raw = 103.1668 * Math.exp(-0.04354 * (wb - wa)) - 3.1669;
+  return Math.max(0, Math.min(100, raw));
+}
+
+// Lichess game accuracy = mean of arithmetic mean and harmonic mean of the
+// player's move accuracies. Harmonic drags down single-blunder games that a
+// flat average would forgive.
+export function gameAccuracy(moveAccs: number[]): number {
+  const xs = moveAccs.filter((n) => Number.isFinite(n));
+  if (xs.length === 0) return 0;
+  const arith = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const safe = xs.map((x) => Math.max(x, 0.1));
+  const harm = safe.length / safe.reduce((a, b) => a + 1 / b, 0);
+  return Math.max(0, Math.min(100, Math.round((arith + harm) / 2)));
+}
+
 export async function analyzePgn(
   pgn: string,
   depth = 12,
@@ -141,11 +171,7 @@ export async function analyzePgn(
 
   const evals: MoveEval[] = [];
   const userColor = parsePgnSide(pgn, username);
-  let totalLoss = 0;
-  let counted = 0;
-  // Mate scores (±100000) would nuke the mean: cap per-move loss for accuracy.
-  // Verdicts still use the raw loss, so blunders stay blunders.
-  const ACC_LOSS_CAP = 300;
+  const userMoveAccs: number[] = [];
   const probe = new Chess();
   for (let i = 0; i < sans.length; i++) {
     const before = searched[i];
@@ -155,10 +181,7 @@ export async function analyzePgn(
     const actualMover = isWhite ? after.cp : -after.cp;
     const loss = Math.max(0, bestMover - actualMover);
     const isUserMove = userColor === null || (userColor === "w") === isWhite;
-    if (isUserMove) {
-      totalLoss += Math.min(loss, ACC_LOSS_CAP);
-      counted++;
-    }
+    if (isUserMove) userMoveAccs.push(moveAccuracy(actualMover, loss));
     const matBefore = materialScore(fens[i]);
     const matAfter = materialScore(fens[i + 1]);
     // Net material from the mover's perspective (captures minus losses).
@@ -179,7 +202,6 @@ export async function analyzePgn(
     probe.move(sans[i]);
   }
 
-  const avgLoss = counted ? totalLoss / counted : 0;
-  const accuracy = Math.max(0, Math.min(100, Math.round(100 - avgLoss / 3)));
+  const accuracy = userMoveAccs.length > 0 ? gameAccuracy(userMoveAccs) : 0;
   return { evals, accuracy, userColor };
 }
