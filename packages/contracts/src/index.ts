@@ -87,3 +87,56 @@ export const GameDetailSchema = z.object({
   baseSecs: z.number().optional(),
 });
 export type GameDetail = z.infer<typeof GameDetailSchema>;
+
+// Insights page (rulebook pass over stored PGNs — no Stockfish).
+// Every percentage is 0-100, every game id is a Game.id the client can
+// open via /games/:id.
+export const InsightsProfileSchema = z.object({
+  title: z.string(), // e.g. "Aggressive Improviser"
+  blurb: z.string(), // 1-2 sentence description
+});
+export type InsightsProfile = z.infer<typeof InsightsProfileSchema>;
+
+export const InsightsQuickStatsSchema = z.object({
+  tactical: z.number().min(0).max(100),
+  positional: z.number().min(0).max(100),
+  defensive: z.number().min(0).max(100),
+  endgame: z.number().min(0).max(100),
+});
+export type InsightsQuickStats = z.infer<typeof InsightsQuickStatsSchema>;
+
+export const InsightsKeyInsightSchema = z.object({
+  kind: z.enum(["patterns", "openings", "strength", "area"]),
+  title: z.string(),
+  subtitle: z.string(),
+});
+export type InsightsKeyInsight = z.infer<typeof InsightsKeyInsightSchema>;
+
+export const InsightsDiscoverySchema = z.object({
+  gameId: z.string(),
+  opponent: z.string(),
+  moveNo: z.number(),
+  san: z.string(),
+  label: z.string(), // e.g. "Missed defensive resource"
+});
+export type InsightsDiscovery = z.infer<typeof InsightsDiscoverySchema>;
+
+export const InsightsResponseSchema = z.object({
+  limit: z.number(),
+  total: z.number(), // games considered
+  analyzed: z.number(), // of those, rows present in game_analyses
+  lastUpdated: z.string().nullable(), // ISO date of newest game, null when empty
+  profile: InsightsProfileSchema,
+  quickStats: InsightsQuickStatsSchema,
+  keyInsights: z.array(InsightsKeyInsightSchema),
+  discoveries: z.array(InsightsDiscoverySchema),
+  discoveriesSummary: z.string(),
+  patternCounts: z.object({
+    queenEarly: z.number(),
+    missedDefense: z.number(),
+    tacticalRisk: z.number(),
+    slowEndgame: z.number(),
+  }),
+  topOpening: z.object({ name: z.string(), count: z.number() }).nullable(),
+});
+export type InsightsResponse = z.infer<typeof InsightsResponseSchema>;

@@ -13,7 +13,7 @@ if (!db) {
 export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3001",
-  trustedOrigins: ["http://localhost:5173"],
+  trustedOrigins: [process.env.FRONTEND_URL ?? "http://localhost:5173"],
   database: drizzleAdapter(db, {
     provider: "sqlite",
     schema,
@@ -35,6 +35,11 @@ export const auth = betterAuth({
   advanced: {
     database: {
       generateId: () => crypto.randomUUID(),
+    },
+    defaultCookieAttributes: {
+      sameSite: "none",
+      secure: true,
+      partitioned: true,
     },
   },
 });

@@ -1,0 +1,131 @@
+.insights { display: flex; flex-direction: column; gap: 12px; }
+
+.insights-top-pills { display: flex; align-items: center; gap: 8px; }
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid #e3e6ec;
+  border-radius: 10px;
+  padding: 6px 12px 6px 8px;
+}
+.conn-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #eef7ee;
+  color: #149154;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+.conn-text { display: flex; flex-direction: column; line-height: 1.2; }
+.conn-text strong { font-size: 11.5px; color: #0f1222; font-weight: 600; }
+.conn-text small { font-size: 11px; color: #149154; display: inline-flex; align-items: center; gap: 4px; }
+.icon-btn {
+  background: #fff;
+  border: 1px solid #e3e6ec;
+  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  cursor: pointer;
+  color: #5b6172;
+  font-size: 15px;
+}
+
+.analyze-card { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.analyze-left { display: flex; flex-direction: column; gap: 4px; }
+.analyze-title { font-size: 14px; color: #0f1222; }
+.range-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.analyze-right { display: flex; align-items: flex-start; gap: 10px; min-width: 190px; justify-content: flex-end; text-align: left; }
+.analyzed-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #eef3ff;
+  color: #4a6cf7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex: none;
+}
+.analyze-right strong { font-size: 13px; color: #0f1222; }
+.muted.small { font-size: 11px; }
+
+.insights-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 12px; }
+.profile-card { display: flex; gap: 14px; align-items: flex-start; }
+.profile-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #eef3ff;
+  color: #4a6cf7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex: none;
+}
+.profile-body { display: flex; flex-direction: column; gap: 4px; }
+.profile-name { font-size: 15px; color: #0f1222; }
+.profile-btn { margin-top: 10px; align-self: flex-start; }
+
+.quick-card { display: flex; flex-direction: column; gap: 10px; }
+.quick-title { font-size: 13px; color: #0f1222; margin-bottom: 2px; }
+.stat-bar-row { display: grid; grid-template-columns: 70px 1fr 38px; align-items: center; gap: 8px; font-size: 11.5px; color: #5b6172; }
+.stat-bar-track { height: 7px; border-radius: 999px; background: #eef0f4; overflow: hidden; }
+.stat-bar-fill { display: block; height: 100%; border-radius: 999px; background: #4a6cf7; transition: width 0.3s ease; }
+.stat-bar-val { text-align: right; color: #343a4d; font-weight: 600; }
+
+.section-label { font-size: 11.5px; margin-top: 2px; }
+.key-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.key-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  font: inherit;
+}
+.key-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex: none;
+}
+.tint-blue { background: #eef3ff; color: #4a6cf7; }
+.tint-green { background: #e9f7ee; color: #149154; }
+.tint-amber { background: #fdf3e3; color: #c77b1a; }
+.tint-purple { background: #f1ecfd; color: #7a5af8; }
+.key-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.key-text strong { font-size: 12px; color: #0f1222; font-weight: 600; }
+.key-chev { color: #b6bccb; font-size: 16px; }
+
+.discovery-card { display: flex; align-items: center; gap: 12px; }
+.discovery-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #eef3ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  flex: none;
+}
+.discovery-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.discovery-title { font-size: 12.5px; color: #0f1222; }
+.btn-dark:disabled { opacity: 0.45; cursor: default; }
+
+@media (max-width: 1000px) {
+  .insights-grid { grid-template-columns: 1fr; }
+  .key-row { grid-template-columns: repeat(2, 1fr); }
+  .analyze-card { flex-direction: column; align-items: stretch; }
+  .analyze-right { justify-content: flex-start; }
+}

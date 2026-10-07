@@ -1,0 +1,14 @@
+# gcloud uses this INSTEAD of .gitignore. Intentionally does NOT
+# exclude backend/bin/ — the Stockfish binary must be in the image
+# (root .gitignore excludes it, which would break --source deploys).
+.git/
+.gitignore
+node_modules/
+backend/node_modules/
+web/node_modules/
+web/dist/
+backend/dist/
+.env
+backend/.env
+*.local
+.DS_Store

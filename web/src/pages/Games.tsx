@@ -6,7 +6,7 @@ import "./Games.css";
 
 import { useChessProfile } from "../lib/profile.ts";
 
-const API = "http://localhost:3001";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 const PAGE_SIZE = 20;
 // One full lightweight list (no PGNs) per browser session. Tabs and pages
 // are computed locally from it — the ONLY refetch paths are a browser

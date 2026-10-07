@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-const API = "http://localhost:3001";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 // Session-long cache for the linked handle. The handle only changes when
 // the user links a new account, so there is no expiry timer — every page

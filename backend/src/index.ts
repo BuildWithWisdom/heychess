@@ -4,6 +4,7 @@ import { Chess } from "chess.js";
 import { GameAnalysisSchema, GameDetailSchema, GameSchema, PlayerStatsSchema } from "@heychess/contracts";
 import { getChessComGamesWithMeta, fetchAllChessComGames, getChessComStats } from "./chesscom.ts";
 import { analyzePgn } from "./engine.ts";
+import { computeInsights, countAnalyzed, getRecentGamesWithPgn, getStoredAccuracies } from "./insights.ts";
 import { explainGame } from "./llm.ts";
 import { identifyOpening } from "./openings.ts";
 import { isDbEnabled } from "./db/client.ts";
@@ -12,7 +13,8 @@ import { attachStoredAccuracy, expireSync, getAccuracySummary, getFreshStoredGam
 
 const app = new Hono();
 
-app.use("/*", cors({ origin: ["http://localhost:5173"], credentials: true }));
+const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
+app.use("/*", cors({ origin: [frontendUrl], credentials: true }));
 
 // Better Auth handler — must come before other /api routes.
 // Handles: /api/auth/sign-up/email, /sign-in/email, /sign-out, /get-session, etc.
@@ -52,7 +54,7 @@ app.put("/api/profile", async (c) => {
   return c.json({ chessComUsername: handle });
 });
 
-app.get("/healthz", (c) => c.json({ ok: true, service: "heychess-backend" }));
+app.get("/api/health", (c) => c.json({ ok: true, service: "heychess-backend" }));
 
 // Parse [%clk 0:09:58.2] / [0:03:42] / [92.5] -> seconds remaining.
 function parseClkToSecs(raw: string): number | null {
@@ -383,6 +385,36 @@ app.post("/api/analyze/explain-game", async (c) => {
   }
 });
 
+// Insights page: rulebook pass over the user's most recent stored PGNs.
+// No Stockfish here — chess.js replay + material counting only, so any
+// limit (10/20/30/50/100) answers in well under a second straight from Turso.
+app.get("/api/insights", async (c) => {
+  const userId = await requireUserId(c);
+  if (!userId) return c.json({ error: "unauthorized" }, 401);
+  const chessHandle = await getLinkedChessHandle(userId);
+  if (!chessHandle) return c.json({ error: "no linked chess.com account" }, 400);
+  const rawLimit = Number(c.req.query("limit") ?? 30) || 30;
+  const limit = Math.min(Math.max(rawLimit, 5), 100);
+  if (!isDbEnabled()) return c.json({ error: "db unavailable" }, 500);
+  try {
+    const rows = await getRecentGamesWithPgn(userId, limit);
+    const ids = rows.map((r) => r.id);
+    const [analyzed, storedAcc, overall] = await Promise.all([
+      countAnalyzed(userId, ids).catch(() => 0),
+      getStoredAccuracies(userId, ids).catch(() => new Map<string, number>()),
+      getAccuracySummary(userId, chessHandle).catch(() => null),
+    ]);
+    return c.json(
+      computeInsights(rows, chessHandle, analyzed, limit, {
+        storedAcc,
+        fallbackAccuracy: overall?.avgAccuracy ?? null,
+      })
+    );
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : "insights failed" }, 500);
+  }
+});
+
 // Stored analysis read path. Detail serves this instantly; 404 (or a row
 // shallower than depth 16) means "analyze it".
 app.get("/api/games/analysis", async (c) => {
@@ -418,6 +450,9 @@ console.log(`heychess-backend listening on :${port}`);
 
 export default {
   port,
+  // Cloud Run routes to the container IP, not loopback — Bun defaults
+  // to localhost here, which passes the startup probe but 404s externally.
+  hostname: "0.0.0.0",
   // Stockfish at depth 16 + LLM coach run well past Bun's 10s default.
   idleTimeout: 180,
   fetch: app.fetch,

@@ -9,7 +9,7 @@ import { updateCachedAccuracy } from "../utils/gamesCache";
 import { classifyTactic, moverMaterialDiffCp, TACTIC_LEGEND, type TacticType } from "../utils/tactics";
 import "./GameDetail.css";
 
-const API = "http://localhost:3001";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 // Single depth: quick was inflating accuracy, so every game runs deep.
 const QUICK_DEPTH = 16;
 // Safety cap per coach call; engine notes cover the rest regardless.

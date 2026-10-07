@@ -6,7 +6,7 @@ import "./Games.css";
 import "./Home.css";
 import { useChessProfile } from "../lib/profile.ts";
 
-const API = "http://localhost:3001";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 const LIMIT = 10;
 

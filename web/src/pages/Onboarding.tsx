@@ -7,7 +7,7 @@ import { linkChessProfile } from "../lib/profile.ts";
 import { clearGamesCache } from "../utils/gamesCache.ts";
 import "./Onboarding.css";
 
-const API = "http://localhost:3001";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 // All game endpoints identify the user from the session cookie.
 // The linked chess.com handle lives on the user profile — the frontend
