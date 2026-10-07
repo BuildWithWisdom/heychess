@@ -42,6 +42,31 @@ export function setCachedGames(key: string, games: Game[]) {
   writeGamesStore(all);
 }
 
+// Drop a single cached list (e.g. Home's latest-N slice) so the next
+// visit refetches it. Used after a sync/import added rows server-side.
+export function removeCachedGames(key: string) {
+  const all = readGamesStore();
+  if (!(key in all)) return;
+  delete all[key];
+  writeGamesStore(all);
+}
+
+// Drop every latest-N slice list for a user (keys "<user>:<limit>") after
+// a sync/import, so Home refetches the true latest games. The full-list
+// cache ("full:<user>") is left alone — the sync flow repopulates it.
+export function invalidateSliceCaches(username: string) {
+  const prefix = `${username.toLowerCase()}:`;
+  const all = readGamesStore();
+  let touched = false;
+  for (const key of Object.keys(all)) {
+    if (key.startsWith(prefix)) {
+      delete all[key];
+      touched = true;
+    }
+  }
+  if (touched) writeGamesStore(all);
+}
+
 // Drop all cached game lists (e.g. after linking a new handle or signing
 // up) so the next user never sees the previous user's rows.
 export function clearGamesCache() {

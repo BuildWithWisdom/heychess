@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Game } from "@heychess/contracts";
-import { getCachedGames, isBrowserReload, loadGamesUi, saveGamesUi, setCachedGames } from "../utils/gamesCache";
+import { getCachedGames, invalidateSliceCaches, isBrowserReload, loadGamesUi, saveGamesUi, setCachedGames } from "../utils/gamesCache";
 import "./Games.css";
 
 import { useChessProfile } from "../lib/profile.ts";
@@ -130,6 +130,11 @@ export default function Games() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "sync failed");
     } finally {
+      // The sync added rows server-side. Home's latest-N slice cache would
+      // otherwise keep painting the pre-sync 10 forever (it never expires),
+      // so drop it — the next Home visit refetches the true latest games.
+      // Runs on failure too: a partial sync may still have added rows.
+      invalidateSliceCaches(username);
       setSyncingNow(false);
     }
   }

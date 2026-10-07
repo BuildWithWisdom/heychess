@@ -13,8 +13,12 @@ import { attachStoredAccuracy, expireSync, getAccuracySummary, getFreshStoredGam
 
 const app = new Hono();
 
-const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
-app.use("/*", cors({ origin: [frontendUrl], credentials: true }));
+// Comma-separated list, e.g. "https://heychess-pi.vercel.app,https://heychess.aguowisdom.com"
+const frontendUrls = (process.env.FRONTEND_URL ?? "http://localhost:5173")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use("/*", cors({ origin: frontendUrls, credentials: true }));
 
 // Better Auth handler — must come before other /api routes.
 // Handles: /api/auth/sign-up/email, /sign-in/email, /sign-out, /get-session, etc.
