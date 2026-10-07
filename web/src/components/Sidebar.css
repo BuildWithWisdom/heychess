@@ -81,3 +81,9 @@
 .sidebar-user strong { display: block; font-size: 13px; }
 .sidebar-user small { color: #8b91a3; font-size: 11px; }
 .sidebar-user .gear { margin-left: auto; color: #8b91a3; }
+
+/* Mobile: sidebar never shows — the right-side overlay drawer
+   (MobileMenu) is the only navigation. Desktop untouched. */
+@media (max-width: 900px) {
+  .sidebar { display: none; }
+}

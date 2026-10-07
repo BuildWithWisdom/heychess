@@ -1,3 +1,10 @@
 .app-shell { display: flex; min-height: 100vh; background: #f4f5f7; }
 .content { flex: 1; padding: 28px; max-width: 1200px; margin-left: 230px; min-height: 100vh; box-sizing: border-box; }
 .content h1 { margin: 0 0 4px; font-size: 22px; color: #111318; }
+
+/* Mobile: desktop sidebar is hidden, the hamburger header + right-side
+   overlay drawer (MobileMenu) takes over. Content goes full-width. */
+@media (max-width: 900px) {
+  .app-shell { flex-direction: column; overflow-x: clip; }
+  .content { margin-left: 0; padding: 8px 16px 32px; min-height: auto; max-width: 100%; min-width: 0; overflow-x: clip; }
+}

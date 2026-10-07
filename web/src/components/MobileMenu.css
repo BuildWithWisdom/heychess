@@ -1,0 +1,248 @@
+/* Mobile-only top bar + right-side overlay drawer.
+   Hidden on desktop (>900px). The drawer overlays content —
+   it never pushes the page (position: fixed + transform). */
+
+.mobile-header {
+  display: none;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(16, 24, 40, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+
+.drawer-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  width: min(320px, 86vw);
+  background: #fff;
+  color: #111318;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  box-shadow: -12px 0 40px rgba(16, 24, 40, 0.22);
+  transform: translateX(105%);
+  transition: transform 0.26s ease;
+  visibility: hidden;
+}
+
+.drawer.open {
+  transform: translateX(0);
+  visibility: visible;
+}
+
+.drawer-profile {
+  margin: 12px;
+  background: #101218;
+  color: #fff;
+  border-radius: 14px;
+  padding: 16px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.drawer-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #2c3242;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.drawer-who strong {
+  display: block;
+  font-size: 14px;
+}
+
+.drawer-who small {
+  color: #9aa0b2;
+  font-size: 11.5px;
+}
+
+.drawer-close {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: #fff;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.drawer-nav,
+.drawer-group {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 12px;
+}
+
+.drawer-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 10px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: #1a1e28;
+  font-size: 14px;
+  font-family: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.drawer-link:hover {
+  background: #f1f2f6;
+}
+
+.drawer-link.active {
+  background: #101218;
+  color: #fff;
+}
+
+.drawer-link-icon {
+  width: 22px;
+  text-align: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.drawer-logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.drawer-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawer-link-text small {
+  font-size: 11px;
+}
+
+.drawer-link-text small.ok {
+  color: #149154;
+}
+
+.drawer-link-text small.dim {
+  color: #9aa0b2;
+}
+
+.drawer-link.active .drawer-link-text small.ok,
+.drawer-link.active .drawer-link-text small.dim {
+  color: #b7bcc9;
+}
+
+.drawer-link-chev {
+  margin-left: auto;
+  color: #9aa0b2;
+  font-size: 18px;
+}
+
+.drawer-link.active .drawer-link-chev {
+  color: #fff;
+}
+
+.drawer-sep {
+  height: 1px;
+  background: #eceef3;
+  margin: 8px 22px;
+}
+
+.drawer-quote {
+  margin: auto 12px 12px;
+  background: #f4f5f7;
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+}
+
+.drawer-quote p {
+  font-size: 12.5px;
+  color: #3c4257;
+  font-style: italic;
+  margin: 0 0 4px;
+}
+
+.drawer-quote small {
+  font-size: 11px;
+  color: #9aa0b2;
+}
+
+@media (max-width: 900px) {
+  .mobile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: #f4f5f7;
+    padding: 12px 16px;
+  }
+
+  .mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    font-size: 13px;
+  }
+
+  .mobile-brand-mark {
+    font-size: 18px;
+  }
+
+  .hamburger {
+    width: 42px;
+    height: 42px;
+    border: none;
+    border-radius: 12px;
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .hamburger span {
+    display: block;
+    width: 22px;
+    height: 2px;
+    border-radius: 2px;
+    background: #111318;
+  }
+}

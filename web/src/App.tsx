@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar.tsx";
+import MobileMenu from "./components/MobileMenu.tsx";
 import Home from "./pages/Home.tsx";
 import Games from "./pages/Games.tsx";
 import GameDetail from "./pages/GameDetail.tsx";
@@ -19,10 +21,16 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 function Shell() {
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className="app-shell">
       <RequireAuth>
         <Sidebar />
+        <MobileMenu
+          open={menuOpen}
+          onOpen={() => setMenuOpen(true)}
+          onClose={() => setMenuOpen(false)}
+        />
         <main className="content">
           <Routes>
             <Route path="/" element={<Home />} />

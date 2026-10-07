@@ -300,35 +300,211 @@
   color: #111318;
 }
 
+/* Mobile-only splash CTA (TEMPO screen 1). Hidden on desktop. */
+.login-mobile-cta {
+  display: none;
+}
+
+/* Bottom-sheet backdrop. Rendered only after entering on mobile. */
+.login-sheet-backdrop {
+  display: none;
+}
+
+/* Keep autofill from painting inputs yellow */
+.login-input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 100px #fff inset;
+  -webkit-text-fill-color: #111318;
+}
+
 @media (max-width: 900px) {
   .login-page {
     grid-template-columns: 1fr;
     height: auto;
     max-height: none;
     overflow: visible;
+    background: #f3f0eb;
   }
   .login-left {
     height: auto;
     max-height: none;
     min-height: auto;
-    padding-bottom: 0;
+    padding: 20px 20px 0;
+    background: #f3f0eb;
+  }
+  .login-brand {
+    letter-spacing: 2px;
+    font-size: 13px;
+    justify-content: flex-start;
   }
   .login-hero-copy {
-    margin-top: 40px;
+    margin-top: 24px;
+    max-width: none;
+  }
+  .login-hero-copy h1 {
+    font-size: 26px;
+    line-height: 1.2;
+    letter-spacing: -0.3px;
+  }
+  .login-hero-copy p {
+    font-size: 13px;
+    max-width: none;
+    color: #6b7280;
+    margin-top: 8px;
   }
   .login-hero-img-wrap {
     flex: none;
     min-height: 0;
+    margin: 24px -20px 0;
+    width: calc(100% + 40px);
+    background: #f3f0eb;
+    border-radius: 0;
   }
   .login-hero-img {
     width: 100%;
-    height: auto;
+    height: 300px;
+    object-fit: cover;
+    object-position: left bottom;
+    border-radius: 0;
+    /* Same edge-blend as desktop so the image melts into the beige bg */
+    -webkit-mask-image:
+      linear-gradient(to bottom, transparent 0, #000 36px),
+      linear-gradient(to top, transparent 0, #000 60px);
+    -webkit-mask-composite: source-in;
+    mask-image:
+      linear-gradient(to bottom, transparent 0, #000 36px),
+      linear-gradient(to top, transparent 0, #000 60px);
+    mask-composite: intersect;
+  }
+  /* Splash first: CTA visible, form hidden until tap */
+  .login-mobile-cta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 20px 0 calc(28px + env(safe-area-inset-bottom));
+  }
+  .login-page.entered .login-mobile-cta {
+    display: none;
+  }
+  .login-getstarted {
+    height: 52px;
+    background: #141821;
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .login-login-link {
+    height: 44px;
+    background: none;
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    color: #111318;
+    cursor: pointer;
+    font-family: inherit;
   }
   .login-right {
-    padding: 24px 20px 48px;
-    align-items: flex-start;
+    display: none;
+  }
+  /* Bottom sheet: floats above the splash, never pushes it */
+  .login-page.entered {
+    overflow: hidden;
+    height: 100dvh;
+  }
+  .login-sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: rgba(16, 24, 40, 0.4);
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .login-page.entered .login-right {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    padding: 0;
     height: auto;
     max-height: none;
     overflow: visible;
+    background: transparent;
+    align-items: stretch;
+    justify-content: center;
+  }
+  .login-page.entered .login-card {
+    background: #fff;
+    border: 1px solid #ece7dd;
+    border-bottom: none;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 30px rgba(16, 24, 40, 0.18);
+    padding: 12px 20px calc(20px + env(safe-area-inset-bottom));
+    width: 100%;
+    max-width: 480px;
+    max-height: 88dvh;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  .login-page.entered .login-card::before {
+    content: "";
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 999px;
+    background: #e3e6ec;
+    margin: 2px auto 14px;
+  }
+  /* Segmented Log In / Sign Up to match TEMPO pill language */
+  .login-tabs {
+    background: #f1f2f6;
+    border: none;
+    border-radius: 999px;
+    padding: 4px;
+    gap: 4px;
+    margin-bottom: 18px;
+  }
+  .login-tab {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding: 10px 0;
+    border-radius: 999px;
+    font-size: 13.5px;
+    color: #5b6172;
+  }
+  .login-tab.active {
+    background: #151a24;
+    color: #fff;
+    border-bottom-color: transparent;
+  }
+  .login-input {
+    height: 52px;
+    font-size: 15px;
+    border-radius: 12px;
+  }
+  .login-submit {
+    height: 52px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+  .login-oauth-btn {
+    height: 52px;
+    border-radius: 12px;
+    font-size: 13.5px;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-hero-copy h1 {
+    font-size: 24px;
+  }
+  .login-hero-img {
+    height: 280px;
   }
 }

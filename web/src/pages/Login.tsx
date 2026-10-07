@@ -7,6 +7,9 @@ import "./Login.css";
 
 export default function Login() {
   const [tab, setTab] = useState<"login" | "signup">("login");
+  // Mobile only: TEMPO mock is a splash first (Get Started / Log In),
+  // the form appears after a tap. Desktop always shows the form.
+  const [entered, setEntered] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -55,8 +58,17 @@ export default function Login() {
     }
   }
 
+  function enter(next: "login" | "signup") {
+    setTab(next);
+    setError(null);
+    setEntered(true);
+    requestAnimationFrame(() => {
+      document.getElementById("login-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   return (
-    <div className="login-page">
+    <div className={entered ? "login-page entered" : "login-page"}>
       <div className="login-left">
         <div className="login-brand">
           <span className="login-brand-mark">♜</span>
@@ -82,10 +94,27 @@ export default function Login() {
             alt="Black king and white pawn"
           />
         </div>
+
+        <div className="login-mobile-cta">
+          <button type="button" className="login-getstarted" onClick={() => enter("signup")}>
+            Get Started
+          </button>
+          <button type="button" className="login-login-link" onClick={() => enter("login")}>
+            Log In
+          </button>
+        </div>
       </div>
 
+      {entered && (
+        <button
+          type="button"
+          aria-label="Back"
+          className="login-sheet-backdrop"
+          onClick={() => setEntered(false)}
+        />
+      )}
       <div className="login-right">
-        <div className="login-card">
+        <div className="login-card" id="login-card">
           <div className="login-tabs" role="tablist" aria-label="Auth">
             <button
               type="button"
