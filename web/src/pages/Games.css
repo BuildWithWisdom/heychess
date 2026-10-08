@@ -40,7 +40,14 @@
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
   min-width: 0;
   max-width: 100%;
+}
+
+/* The table scrolls inside its own wrapper so the filter tabs and
+   pager stay fixed instead of sliding away with it. */
+.table-scroll {
   overflow-x: auto;
+  margin: 0 -16px;
+  padding: 0 16px;
 }
 
 .tabs { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -62,6 +69,21 @@
 
 @media (max-width: 900px) {
   .page-head { flex-direction: column; gap: 10px; }
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
+    margin: 0 -16px 10px;
+    padding: 0 16px 2px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex-shrink: 0; }
   .table { min-width: 560px; }
 }
 .table th {
@@ -178,8 +200,11 @@
   height: 18px;
   border-radius: 50%;
   border: 1px dashed #b6bccb;
+  background: #fff;
   color: #8a90a3;
   font-size: 11px;
   font-weight: 600;
-  cursor: help;
+  font-family: inherit;
+  padding: 0;
+  cursor: pointer;
 }

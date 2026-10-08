@@ -242,6 +242,7 @@ export default function Games() {
         {loading && <p className="muted">Loading games…</p>}
         {syncing && !loading && <p className="muted">Syncing all games in the background…</p>}
 
+        <div className="table-scroll">
         <table className="table">
           <thead>
               <tr>
@@ -272,16 +273,23 @@ export default function Games() {
                   {g.accuracy !== undefined ? (
                     `${g.accuracy}%`
                   ) : (
-                    <span className="acc-missing" title="Analyze game to get your accuracy">
+                    <button
+                      type="button"
+                      className="acc-missing"
+                      title="Analyze game to get your accuracy"
+                      aria-label="Analyze game to get your accuracy"
+                      onClick={() => navigate(`/games/${encodeURIComponent(g.id)}`, { state: { game: g } })}
+                    >
                       ?
-                    </span>
-                  )}
+                    </button>
+                    )}
                 </td>
                 <td>{new Date(g.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
         {tab === "lichess" && visible.length === 0 && !loading && (
           <p className="muted">No Lichess games yet — Lichess is not connected.</p>
         )}

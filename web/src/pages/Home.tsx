@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import type { Game, PlayerStats } from "@heychess/contracts";
 import { gamesCacheKey, getCachedGames, setCachedGames } from "../utils/gamesCache";
 import "./Games.css";
@@ -26,6 +26,7 @@ export default function Home() {
   const [avgAccuracy, setAvgAccuracy] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const navigate = useNavigate();
 
   useEffect(() => {
     async function load() {
@@ -91,7 +92,7 @@ export default function Home() {
 
   return (
     <section>
-      <h1>Good evening, Wisdom 👋</h1>
+      <h1>Good evening, Wisdom</h1>
       <p className="muted">Here's a quick look at your chess journey.</p>
 
       {!username && !loading && (
@@ -144,6 +145,7 @@ export default function Home() {
             <Link to="/games" className="muted">View all</Link>
           </div>
           {loading && <p className="muted">Loading games…</p>}
+          <div className="table-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -174,9 +176,15 @@ export default function Home() {
                     {g.accuracy !== undefined ? (
                       `${g.accuracy}%`
                     ) : (
-                      <span className="acc-missing" title="Analyze game to get your accuracy">
+                      <button
+                        type="button"
+                        className="acc-missing"
+                        title="Analyze game to get your accuracy"
+                        aria-label="Analyze game to get your accuracy"
+                        onClick={() => navigate(`/games/${encodeURIComponent(g.id)}`, { state: { game: g } })}
+                      >
                         ?
-                      </span>
+                      </button>
                     )}
                   </td>
                   <td>{new Date(g.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</td>
@@ -184,6 +192,7 @@ export default function Home() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </section>
