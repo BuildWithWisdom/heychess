@@ -1,10 +1,12 @@
 .ob-page {
   min-height: 100vh;
+  min-height: 100dvh;
   background: #f3f0eb;
   font-family: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
   color: #111318;
   box-sizing: border-box;
   padding: 20px 24px 40px;
+  overflow-x: clip;
 }
 
 .ob-top {
@@ -13,6 +15,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .ob-brand {
@@ -22,6 +25,8 @@
   font-weight: 700;
   letter-spacing: 2.5px;
   font-size: 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ob-brand-mark {
@@ -35,11 +40,18 @@
   gap: 12px;
   font-size: 11.5px;
   color: #9aa0b2;
+  flex-shrink: 0;
+}
+
+.ob-progress-label {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ob-dots {
   display: flex;
   gap: 6px;
+  flex-shrink: 0;
 }
 
 .ob-dot {
@@ -636,17 +648,134 @@
   color: #9aa0b2;
 }
 
-@media (max-width: 640px) {
-  .ob-card {
-    padding: 26px 22px;
+/* Tablet: single column early so the side image never squeezes.
+   Steps 2-5 get a narrower centered column for readability. */
+@media (max-width: 900px) {
+  .ob-top,
+  .ob-wrap {
+    max-width: 560px;
   }
   .ob-s1 {
     grid-template-columns: 1fr;
+    gap: 0;
   }
   .ob-s1-side {
     display: none;
   }
+}
+
+@media (max-width: 640px) {
+  .ob-page {
+    padding: 16px 16px calc(32px + env(safe-area-inset-bottom));
+  }
+  .ob-top {
+    margin-bottom: 14px;
+  }
+  .ob-brand {
+    font-size: 13px;
+    letter-spacing: 2px;
+    gap: 8px;
+  }
+  .ob-progress {
+    gap: 8px;
+  }
+  .ob-card {
+    padding: 26px 20px;
+  }
+  .ob-s1-main {
+    padding: 4px 0 0;
+  }
+  .ob-title {
+    font-size: 24px;
+    line-height: 1.2;
+  }
+  .ob-sub {
+    font-size: 13px;
+  }
+  /* Source cards stack: 2-col is too cramped at ~360px. */
+  .ob-sources {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .ob-source {
+    min-height: 0;
+    padding: 16px;
+    gap: 2px;
+  }
+  .ob-source-head {
+    margin-bottom: 8px;
+  }
+  .ob-source-logo {
+    width: 40px;
+    height: 40px;
+  }
+  .ob-pgn {
+    height: 52px;
+    border-radius: 12px;
+    font-size: 13.5px;
+  }
+  .ob-skip {
+    padding: 12px 0;
+    margin-top: 8px;
+  }
+  .ob-back {
+    padding: 8px 0;
+    margin-bottom: 14px;
+  }
+  /* 16px font prevents iOS auto-zoom on focus. */
+  .ob-input {
+    height: 52px;
+    font-size: 16px;
+    border-radius: 12px;
+  }
+  .ob-cta {
+    height: 52px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+  /* Found banner wraps instead of squeezing the text. */
+  .ob-found {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
   .ob-counts {
     grid-template-columns: repeat(2, 1fr);
+  }
+  .ob-count {
+    min-height: 96px;
+    padding: 16px 12px;
+  }
+  .ob-tasks {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 380px) {
+  .ob-page {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .ob-title {
+    font-size: 23px;
+  }
+  .ob-dot {
+    width: 12px;
+  }
+  .ob-dots {
+    gap: 4px;
+  }
+  .ob-found {
+    gap: 10px;
+  }
+  /* Count drops to its own line so handle + count never collide. */
+  .ob-found-count {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .ob-stat {
+    padding: 14px 6px;
+  }
+  .ob-stat strong {
+    font-size: 17px;
   }
 }

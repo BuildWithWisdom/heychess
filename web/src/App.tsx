@@ -10,6 +10,7 @@ import Progress from "./pages/Progress.tsx";
 import Login from "./pages/Login.tsx";
 import Onboarding from "./pages/Onboarding.tsx";
 import { authClient } from "./lib/auth-client.ts";
+import { useChessProfile } from "./lib/profile.ts";
 import "./App.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -17,6 +18,27 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   if (isPending) return <div className="app-shell">Loading…</div>;
   if (!session) return <Navigate to="/login" state={{ from: location }} replace />;
+  return <>{children}</>;
+}
+
+// Reverse of RequireAuth: logged-in users hitting /login go home.
+function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
+  const { data: session, isPending } = authClient.useSession();
+  if (isPending) return <div className="app-shell">Loading…</div>;
+  if (session) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+// /welcome is onboarding for users with nothing linked yet. Logged-in
+// users who already linked a chess account bounce home instead.
+function RequireOnboarding({ children }: { children: React.ReactNode }) {
+  const { data: session, isPending } = authClient.useSession();
+  const { linked, loading: profileLoading } = useChessProfile();
+  const location = useLocation();
+  if (isPending) return <div className="app-shell">Loading…</div>;
+  if (!session) return <Navigate to="/login" state={{ from: location }} replace />;
+  if (profileLoading) return <div className="app-shell">Loading…</div>;
+  if (linked) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -48,13 +70,20 @@ function Shell() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
+      <Route
+        path="/login"
+        element={
+          <RedirectIfAuthed>
+            <Login />
+          </RedirectIfAuthed>
+        }
+      />
       <Route
         path="/welcome"
         element={
-          <RequireAuth>
+          <RequireOnboarding>
             <Onboarding />
-          </RequireAuth>
+          </RequireOnboarding>
         }
       />
       <Route path="/*" element={<Shell />} />
