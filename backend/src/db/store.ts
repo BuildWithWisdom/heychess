@@ -35,6 +35,18 @@ export async function setLinkedChessHandle(userId: string, handle: string) {
     .where(eq(user.id, userId));
 }
 
+// Disconnect the chess.com account but KEEP this user's stored games,
+// analyses, and sync rows. Every account's library is scoped by handle,
+// so relinking restores it whole and other accounts are unaffected.
+export async function clearLinkedChessHandle(userId: string) {
+  const db = getDb();
+  if (!db) return;
+  await db
+    .update(user)
+    .set({ chessComUsername: null })
+    .where(eq(user.id, userId));
+}
+
 function userSideIsWhite(pgn: string | null, chessHandle: string): boolean | null {
   if (!pgn) return null;
   const w = pgn.match(/\[White\s+"([^"]+)"\]/)?.[1]?.toLowerCase();
@@ -49,12 +61,16 @@ export async function getFreshStoredGames(
 ): Promise<Game[] | null> {
   const db = getDb();
   if (!db) return null;
-  const sync = await db.select().from(syncState).where(eq(syncState.userId, userId));
+  const lower = chessHandle.toLowerCase();
+  const sync = await db
+    .select()
+    .from(syncState)
+    .where(and(eq(syncState.userId, userId), eq(syncState.chessHandle, lower)));
   if (sync.length === 0 || now() - sync[0].lastSyncedAt > SYNC_TTL_MS) return null;
   const rows = await db
     .select()
     .from(games)
-    .where(eq(games.userId, userId))
+    .where(and(eq(games.userId, userId), eq(games.chessHandle, lower)))
     .orderBy(desc(games.date))
     .limit(limit);
   if (rows.length === 0) return null;
@@ -156,8 +172,8 @@ export async function upsertGames(
     .insert(syncState)
     .values({ userId, chessHandle: lower, lastSyncedAt: syncedAt, gamesCount: list.length })
     .onConflictDoUpdate({
-      target: syncState.userId,
-      set: { chessHandle: lower, lastSyncedAt: syncedAt, gamesCount: list.length },
+      target: [syncState.userId, syncState.chessHandle],
+      set: { lastSyncedAt: syncedAt, gamesCount: list.length },
     });
 }
 
@@ -179,33 +195,40 @@ export async function recordSync(userId: string, chessHandle: string, gamesCount
   const db = getDb();
   if (!db) return;
   const t = now();
+  const lower = chessHandle.toLowerCase();
   await db
     .insert(syncState)
-    .values({ userId, chessHandle: chessHandle.toLowerCase(), lastSyncedAt: t, gamesCount })
+    .values({ userId, chessHandle: lower, lastSyncedAt: t, gamesCount })
     .onConflictDoUpdate({
-      target: syncState.userId,
-      set: { chessHandle: chessHandle.toLowerCase(), lastSyncedAt: t, gamesCount },
+      target: [syncState.userId, syncState.chessHandle],
+      set: { lastSyncedAt: t, gamesCount },
     });
 }
 
-// Force the next read to re-sync (Sync button): age the sync out.
-export async function expireSync(userId: string) {
+// Force the next read to re-sync (Sync button): age out one handle's sync.
+export async function expireSync(userId: string, chessHandle: string) {
   const db = getDb();
   if (!db) return;
+  const lower = chessHandle.toLowerCase();
   await db
     .insert(syncState)
-    .values({ userId, lastSyncedAt: 0, gamesCount: 0 })
+    .values({ userId, chessHandle: lower, lastSyncedAt: 0, gamesCount: 0 })
     .onConflictDoUpdate({
-      target: syncState.userId,
+      target: [syncState.userId, syncState.chessHandle],
       set: { lastSyncedAt: 0 },
     });
 }
 
-// ms since last successful sync, null when never synced.
-export async function getSyncAge(userId: string): Promise<number | null> {
+// ms since one handle's last successful sync, null when never synced.
+export async function getSyncAge(userId: string, chessHandle: string): Promise<number | null> {
   const db = getDb();
   if (!db) return null;
-  const rows = await db.select().from(syncState).where(eq(syncState.userId, userId));
+  const rows = await db
+    .select()
+    .from(syncState)
+    .where(
+      and(eq(syncState.userId, userId), eq(syncState.chessHandle, chessHandle.toLowerCase()))
+    );
   if (rows.length === 0) return null;
   return now() - rows[0].lastSyncedAt;
 }
@@ -258,7 +281,11 @@ export async function getGamesPage(
 ): Promise<{ total: number; games: Game[]; counts: PageCounts } | null> {
   const db = getDb();
   if (!db) return null;
-  const conds = [eq(games.userId, userId)];
+  // Scoped to the linked handle: other accounts' libraries stay invisible
+  // until they are linked again. (Lichess rows carry a NULL handle and are
+  // excluded here until lichess linking lands.)
+  const lower = chessHandle.toLowerCase();
+  const conds = [eq(games.userId, userId), eq(games.chessHandle, lower)];
   if (filter.source) conds.push(eq(games.source, filter.source));
   if (filter.result) conds.push(eq(games.result, filter.result));
   const where = and(...conds);
@@ -272,7 +299,7 @@ export async function getGamesPage(
       lichess: sql<number>`sum(case when ${games.source} = 'lichess' then 1 else 0 end)`,
     })
     .from(games)
-    .where(eq(games.userId, userId));
+    .where(and(eq(games.userId, userId), eq(games.chessHandle, lower)));
 
   const [totalRow] = await db
     .select({ n: sql<number>`count(*)` })
@@ -323,7 +350,13 @@ export async function getGameById(userId: string, chessHandle: string, id: strin
   const rows = await db
     .select()
     .from(games)
-    .where(and(eq(games.userId, userId), eq(games.id, id)))
+    .where(
+      and(
+        eq(games.userId, userId),
+        eq(games.chessHandle, chessHandle.toLowerCase()),
+        eq(games.id, id)
+      )
+    )
     .limit(1);
   if (rows.length === 0) return null;
   const ana = await db
@@ -416,7 +449,7 @@ export async function getAccuracySummary(
   const rows = await db
     .select()
     .from(games)
-    .where(eq(games.userId, userId));
+    .where(and(eq(games.userId, userId), eq(games.chessHandle, lower)));
   const vals: number[] = [];
   for (const r of rows) {
     const stored = storedById.get(r.id);

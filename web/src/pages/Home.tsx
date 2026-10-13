@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { Game, PlayerStats } from "@heychess/contracts";
-import { gamesCacheKey, getCachedGames, setCachedGames } from "../utils/gamesCache";
+import { gamesCacheKey, clearGamesCache, getCachedGames, setCachedGames } from "../utils/gamesCache";
 import "./Games.css";
 import "./Home.css";
-import { useChessProfile } from "../lib/profile.ts";
+import Modal from "../components/Modal.tsx";
+import { unlinkChessProfile, useChessProfile, getDisplayName } from "../lib/profile.ts";
+import { authClient } from "../lib/auth-client.ts";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
@@ -21,12 +23,34 @@ export default function Home() {
   // The linked handle comes from the user profile (server-side).
   // null = new user with nothing linked: show empty, fetch nothing.
   const { handle: username, loading: profileLoading } = useChessProfile();
+  const { data: session } = authClient.useSession();
+  const displayName = getDisplayName(session, { handle: username });
+  const hour = new Date().getHours();
+  const daypart = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
   const [stats, setStats] = useState<PlayerStats | null>(null);
   const [games, setGames] = useState<Game[]>([]);
   const [avgAccuracy, setAvgAccuracy] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [unlinkOpen, setUnlinkOpen] = useState(false);
+  const [unlinkBusy, setUnlinkBusy] = useState(false);
+  const [unlinkError, setUnlinkError] = useState("");
   const navigate = useNavigate();
+
+  // Disconnect the chess.com account so another can be linked. Stored
+  // games stay saved per handle — relinking restores this library whole.
+  async function confirmUnlink() {
+    setUnlinkBusy(true);
+    setUnlinkError("");
+    try {
+      await unlinkChessProfile();
+      clearGamesCache();
+      window.location.href = "/welcome";
+    } catch (e) {
+      setUnlinkError(e instanceof Error ? e.message : "unlink failed");
+      setUnlinkBusy(false);
+    }
+  }
 
   useEffect(() => {
     async function load() {
@@ -92,7 +116,9 @@ export default function Home() {
 
   return (
     <section>
-      <h1>Good evening, Wisdom</h1>
+      <h1>
+        Good {daypart}, {displayName}
+      </h1>
       <p className="muted">Here's a quick look at your chess journey.</p>
 
       {!username && !loading && (
@@ -134,6 +160,18 @@ export default function Home() {
             Connected
           </div>
           <div className="stat-sub muted-green">@{username || "—"}</div>
+          {username && (
+            <button
+              type="button"
+              className="stat-unlink"
+              onClick={() => {
+                setUnlinkError("");
+                setUnlinkOpen(true);
+              }}
+            >
+              Unlink
+            </button>
+          )}
         </div>
       </div>
 
@@ -195,6 +233,35 @@ export default function Home() {
           </div>
         </div>
       </div>
+      {unlinkOpen && (
+        <Modal title={`Unlink @${username}?`} onClose={() => !unlinkBusy && setUnlinkOpen(false)}>
+          <p>
+            This disconnects <strong>@{username}</strong>. Your imported games
+            and analysis stay saved — link this account again anytime to pick
+            up where you left off.
+          </p>
+          {unlinkError && <p className="error">{unlinkError}</p>}
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="modal-btn-ghost"
+              disabled={unlinkBusy}
+              onClick={() => setUnlinkOpen(false)}
+            >
+              Keep account
+            </button>
+            <button
+              type="button"
+              className="modal-btn"
+              disabled={unlinkBusy}
+              onClick={confirmUnlink}
+              autoFocus
+            >
+              {unlinkBusy ? "Unlinking…" : "Unlink account"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }

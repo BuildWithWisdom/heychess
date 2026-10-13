@@ -180,6 +180,15 @@
 .sync-item:hover:not(:disabled) { background: #f1f2f6; }
 .sync-item:disabled { opacity: 0.55; cursor: default; }
 
+.sync-sep {
+  height: 1px;
+  background: #ece7dd;
+  margin: 4px 8px;
+}
+
+.sync-item.danger { color: #b3261e; }
+.sync-item.danger:hover:not(:disabled) { background: #fdecea; }
+
 .btn-light.pager { padding: 5px 10px; font-size: 11.5px; }
 .btn-light.pager:disabled { opacity: 0.5; cursor: default; }
 

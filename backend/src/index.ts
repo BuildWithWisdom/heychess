@@ -9,7 +9,7 @@ import { explainGame } from "./llm.ts";
 import { identifyOpening } from "./openings.ts";
 import { isDbEnabled } from "./db/client.ts";
 import { auth } from "./auth.ts";
-import { attachStoredAccuracy, expireSync, getAccuracySummary, getFreshStoredGames, getGameById, getGamesPage, getLinkedChessHandle, getStoredAnalysis, saveAnalysis, saveAnalysisNotes, setLinkedChessHandle, upsertGames, upsertGamesChunked } from "./db/store.ts";
+import { attachStoredAccuracy, expireSync, getAccuracySummary, getFreshStoredGames, getGameById, getGamesPage, getLinkedChessHandle, getStoredAnalysis, saveAnalysis, saveAnalysisNotes, setLinkedChessHandle, clearLinkedChessHandle, upsertGames, upsertGamesChunked } from "./db/store.ts";
 
 const app = new Hono();
 
@@ -56,6 +56,17 @@ app.put("/api/profile", async (c) => {
   }
   await setLinkedChessHandle(userId, handle);
   return c.json({ chessComUsername: handle });
+});
+
+// Unlink the chess.com account: clears the handle but KEEPS this user's
+// stored games, analyses, and sync rows. Reads are scoped by handle, so
+// relinking restores the account's library whole and other linked accounts
+// are unaffected.
+app.delete("/api/profile/chesscom", async (c) => {
+  const userId = await requireUserId(c);
+  if (!userId) return c.json({ error: "unauthorized" }, 401);
+  await clearLinkedChessHandle(userId);
+  return c.json({ chessComUsername: null });
 });
 
 app.get("/api/health", (c) => c.json({ ok: true, service: "heychess-backend" }));
@@ -154,7 +165,7 @@ app.get("/api/games", async (c) => {
       // Explicit full sync only: Sync button / "import all". Passive reads
       // never touch chess.com, so the library stays exactly what was imported.
       if (c.req.query("refresh") === "1") {
-        try { await expireSync(userId); } catch { /* fall through to sync */ }
+        try { await expireSync(userId, chessHandle); } catch { /* fall through to sync */ }
         void fullSyncUser(userId, chessHandle).catch(() => {});
       }
       const data = await getGamesPage(userId, chessHandle, { source, result }, page, pageSize);
@@ -401,7 +412,7 @@ app.get("/api/insights", async (c) => {
   const limit = Math.min(Math.max(rawLimit, 5), 100);
   if (!isDbEnabled()) return c.json({ error: "db unavailable" }, 500);
   try {
-    const rows = await getRecentGamesWithPgn(userId, limit);
+    const rows = await getRecentGamesWithPgn(userId, chessHandle, limit);
     const ids = rows.map((r) => r.id);
     const [analyzed, storedAcc, overall] = await Promise.all([
       countAnalyzed(userId, ids).catch(() => 0),

@@ -3,8 +3,7 @@ import type { Game } from "@heychess/contracts";
 import signupImg from "../assets/signup.png";
 import chesscomLogo from "../assets/chessdotcom.png";
 import lichessLogo from "../assets/lichess.png";
-import { linkChessProfile } from "../lib/profile.ts";
-import { clearGamesCache } from "../utils/gamesCache.ts";
+import { linkChessProfile } from "../lib/profile.ts";import { clearGamesCache } from "../utils/gamesCache.ts";
 import "./Onboarding.css";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
@@ -76,6 +75,7 @@ export default function Onboarding() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [restored, setRestored] = useState(false);
   const [soon, setSoon] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -102,6 +102,33 @@ export default function Onboarding() {
       const t = Number(sData.totalGames ?? 0);
       setUsername(u);
       setTotal(t);
+      // Known handle? If this user already has stored games for it, restore
+      // the library straight from the DB — no re-import. Import runs only
+      // for handles with zero stored games. Any failure here (or DB off)
+      // falls through to the normal import choice.
+      try {
+        const h = await fetch(`${API}/api/games?page=1&pageSize=1`, {
+          credentials: "include",
+        });
+        const hd = await h.json().catch(() => null);
+        if (h.ok && hd && Number(hd.total) > 0) {
+          const f = await fetch(`${API}/api/games?page=1&pageSize=2000&full=1`, {
+            credentials: "include",
+          });
+          const fd = await f.json().catch(() => null);
+          if (!f.ok) throw new Error(fd?.error ?? "restore failed");
+          // Drop any locally cached rows so Home/Games can only show
+          // this user's just-restored games.
+          clearGamesCache();
+          setSummary(summarize((fd.games ?? []) as Game[]));
+          setRestored(true);
+          setStep(5);
+          return;
+        }
+      } catch {
+        // Fall through to the import choice below.
+      }
+      setRestored(false);
       setChoice(t > 0 && t < 30 ? "all" : 30);
       setStep(3);
     } catch (e) {
@@ -372,7 +399,9 @@ export default function Onboarding() {
             </div>
             <h1 className="ob-title">Your games are ready!</h1>
             <p className="ob-sub">
-              We imported {summary.total} games from Chess.com.
+              {restored
+                ? `Welcome back — ${summary.total} games restored from your library.`
+                : `We imported ${summary.total} games from Chess.com.`}
             </p>
             <div className="ob-stats">
               <div className="ob-stat">

@@ -1,4 +1,6 @@
 import { NavLink } from "react-router-dom";
+import { authClient } from "../lib/auth-client.ts";
+import { getDisplayName } from "../lib/profile.ts";
 import "./Sidebar.css";
 
 const items = [
@@ -9,6 +11,9 @@ const items = [
 ];
 
 export default function Sidebar() {
+  const { data: session } = authClient.useSession();
+  const displayName = getDisplayName(session);
+  const initial = displayName.charAt(0).toUpperCase() || "?";
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
@@ -29,9 +34,9 @@ export default function Sidebar() {
         ))}
       </nav>
       <div className="sidebar-user">
-        <span className="avatar">W</span>
+        <span className="avatar">{initial}</span>
         <div>
-          <strong>Wisdom</strong>
+          <strong>{displayName}</strong>
           <small>Free Plan</small>
         </div>
         <span className="gear">⚙</span>

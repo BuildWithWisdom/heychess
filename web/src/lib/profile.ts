@@ -95,3 +95,36 @@ export async function linkChessProfile(handle: string): Promise<string> {
 export async function fetchLinkedHandle(): Promise<string | null> {
   return fetchHandleOnce();
 }
+
+// Unlink the chess.com account. The server keeps this user's stored
+// games/analyses (scoped per handle), so relinking restores the library
+// whole. Clear local caches and send them to onboarding to link next.
+export async function unlinkChessProfile(): Promise<void> {
+  const res = await fetch(`${API}/api/profile/chesscom`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error ?? "could not unlink account");
+  handleFlight = null;
+  cachedHandle = null;
+}
+
+interface SessionWithUser {
+  user?: { name?: string | null; email?: string | null } | null;
+}
+
+// Display name for greetings/avatars: auth name first, then the email
+// prefix (signup stores that as the name anyway), then the linked chess
+// handle, then a generic fallback. Never a hardcoded name.
+export function getDisplayName(
+  session: SessionWithUser | null | undefined,
+  opts?: { handle?: string | null; fallback?: string }
+): string {
+  const raw =
+    (session?.user?.name ?? "").trim() ||
+    (session?.user?.email?.split("@")[0] ?? "").trim() ||
+    (opts?.handle ?? "").trim() ||
+    (opts?.fallback ?? "there").trim();
+  return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "there";
+}

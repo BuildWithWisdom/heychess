@@ -1,9 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { authClient } from "../lib/auth-client.ts";
-import { useChessProfile } from "../lib/profile.ts";
+import { unlinkChessProfile, useChessProfile, getDisplayName } from "../lib/profile.ts";
+import { clearGamesCache } from "../utils/gamesCache.ts";
 import chesscomLogo from "../assets/chessdotcom.png";
 import lichessLogo from "../assets/lichess.png";
+import Modal from "./Modal.tsx";
+import { SoonModal, useSoon } from "./SoonModal.tsx";
 import "./MobileMenu.css";
 
 const navItems = [
@@ -27,11 +30,8 @@ export default function MobileMenu({
   const { data: session } = authClient.useSession();
   const { handle } = useChessProfile();
 
-  const displayName =
-    (session?.user?.name ?? "").trim() ||
-    (session?.user?.email?.split("@")[0] ?? "") ||
-    "Wisdom";
-  const initial = displayName.charAt(0).toUpperCase() || "W";
+  const displayName = getDisplayName(session, { handle });
+  const initial = displayName.charAt(0).toUpperCase() || "?";
 
   // Close the drawer on every route change.
   useEffect(() => {
@@ -66,6 +66,30 @@ export default function MobileMenu({
   function go(path: string) {
     onClose();
     navigate(path);
+  }
+
+  const [soon, openSoon, closeSoon] = useSoon();
+  const [unlinkOpen, setUnlinkOpen] = useState(false);
+  const [unlinkBusy, setUnlinkBusy] = useState(false);
+  const [unlinkError, setUnlinkError] = useState("");
+
+  // Disconnect the linked account so another can be linked. Stored games
+  // stay saved per handle — relinking restores the library whole.
+  async function confirmUnlink() {
+    setUnlinkBusy(true);
+    setUnlinkError("");
+    try {
+      await unlinkChessProfile();
+      clearGamesCache();
+      window.location.href = "/welcome";
+    } catch (e) {
+      setUnlinkError(e instanceof Error ? e.message : "unlink failed");
+      setUnlinkBusy(false);
+    }
+  }
+  function soonThen(msg: string) {
+    onClose();
+    openSoon(msg);
   }
 
   return (
@@ -143,12 +167,23 @@ export default function MobileMenu({
             Profile
             <span className="drawer-link-chev">›</span>
           </button>
-          <button type="button" className="drawer-link" onClick={() => go("/welcome")}>
+          <button
+            type="button"
+            className="drawer-link"
+            onClick={() => {
+              if (handle) {
+                setUnlinkError("");
+                setUnlinkOpen(true);
+              } else {
+                go("/welcome");
+              }
+            }}
+          >
             <img src={chesscomLogo} alt="" className="drawer-logo" />
             <span className="drawer-link-text">
               Chess.com
               <small className={handle ? "ok" : "dim"}>
-                {handle ? "Connected" : "Not connected"}
+                {handle ? `@${handle}` : "Not connected"}
               </small>
             </span>
             <span className="drawer-link-chev">›</span>
@@ -156,8 +191,7 @@ export default function MobileMenu({
           <button
             type="button"
             className="drawer-link"
-            title="Lichess is not connected yet"
-            onClick={onClose}
+            onClick={() => soonThen("Lichess sync is coming soon.")}
           >
             <img src={lichessLogo} alt="" className="drawer-logo" />
             <span className="drawer-link-text">
@@ -166,12 +200,12 @@ export default function MobileMenu({
             </span>
             <span className="drawer-link-chev">›</span>
           </button>
-          <button type="button" className="drawer-link" onClick={onClose}>
+          <button type="button" className="drawer-link" onClick={() => soonThen("Settings are coming soon.")}>
             <span className="drawer-link-icon">⚙</span>
             Settings
             <span className="drawer-link-chev">›</span>
           </button>
-          <button type="button" className="drawer-link" onClick={onClose}>
+          <button type="button" className="drawer-link" onClick={() => soonThen("Help & Support is coming soon.")}>
             <span className="drawer-link-icon">?</span>
             Help &amp; Support
             <span className="drawer-link-chev">›</span>
@@ -187,6 +221,36 @@ export default function MobileMenu({
           <small>– HeyChess</small>
         </div>
       </aside>
+      {soon && <SoonModal message={soon} onClose={closeSoon} />}
+      {unlinkOpen && (
+        <Modal title={`Unlink @${handle}?`} onClose={() => !unlinkBusy && setUnlinkOpen(false)}>
+          <p>
+            This disconnects <strong>@{handle}</strong>. Your imported games
+            and analysis stay saved — link this account again anytime to pick
+            up where you left off.
+          </p>
+          {unlinkError && <p className="error">{unlinkError}</p>}
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="modal-btn-ghost"
+              disabled={unlinkBusy}
+              onClick={() => setUnlinkOpen(false)}
+            >
+              Keep account
+            </button>
+            <button
+              type="button"
+              className="modal-btn"
+              disabled={unlinkBusy}
+              onClick={confirmUnlink}
+              autoFocus
+            >
+              {unlinkBusy ? "Unlinking…" : "Unlink account"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

@@ -40,6 +40,7 @@ type RecentRow = {
 
 export async function getRecentGamesWithPgn(
   userId: string,
+  chessHandle: string,
   limit: number
 ): Promise<RecentRow[]> {
   const db = getDb();
@@ -55,7 +56,7 @@ export async function getRecentGamesWithPgn(
       chesscomBlackAccuracy: games.chesscomBlackAccuracy,
     })
     .from(games)
-    .where(eq(games.userId, userId))
+    .where(and(eq(games.userId, userId), eq(games.chessHandle, chessHandle.toLowerCase())))
     .orderBy(desc(games.date))
     .limit(limit);
   return rows;

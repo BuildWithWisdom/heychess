@@ -1,10 +1,11 @@
 import { integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-// One row per imported game, OWNED BY A USER.
+// One row per imported game, OWNED BY A USER and SCOPED TO A HANDLE.
 // id = canonical game URL (chess.com) or generated id for imports.
 // PK is (userId, id): two users linking the same chess.com account each
-// get their own rows. chessHandle is only a label saying which external
-// account the game came from — never identity, never access control.
+// get their own rows. chessHandle says which linked account the game came
+// from — every read filters by it, so each account keeps its own library
+// and unlinking just disconnects without deleting anything.
 export const games = sqliteTable(
   "games",
   {
@@ -49,16 +50,21 @@ export const gameAnalyses = sqliteTable(
   (t) => [primaryKey({ columns: [t.userId, t.gameId] })]
 );
 
-// Last successful Chess.com sync, one row per user.
-// Powers "last synced 2 hours ago" in the design.
-export const syncState = sqliteTable("sync_state", {
-  userId: text("user_id")
-    .primaryKey()
-    .references(() => user.id, { onDelete: "cascade" }),
-  chessHandle: text("chess_handle"),
-  lastSyncedAt: integer("last_synced_at").notNull(),
-  gamesCount: integer("games_count").notNull().default(0),
-});
+// Last successful Chess.com sync, one row per (user, linked handle).
+// Each account's library refreshes independently, so freshness is tracked
+// per handle — not per user. Ephemeral timestamps only: safe to rebuild.
+export const syncState = sqliteTable(
+  "sync_state",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    chessHandle: text("chess_handle").notNull(),
+    lastSyncedAt: integer("last_synced_at").notNull(),
+    gamesCount: integer("games_count").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.chessHandle] })]
+);
 
 export type GameRow = typeof games.$inferSelect;
 export type GameAnalysisRow = typeof gameAnalyses.$inferSelect;

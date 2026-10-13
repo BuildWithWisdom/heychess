@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Game } from "@heychess/contracts";
-import { getCachedGames, invalidateSliceCaches, isBrowserReload, loadGamesUi, saveGamesUi, setCachedGames } from "../utils/gamesCache";
+import { getCachedGames, clearGamesCache, invalidateSliceCaches, isBrowserReload, loadGamesUi, saveGamesUi, setCachedGames } from "../utils/gamesCache";
+import Modal from "../components/Modal.tsx";
+import { SoonModal, useSoon } from "../components/SoonModal.tsx";
 import "./Games.css";
 
-import { useChessProfile } from "../lib/profile.ts";
+import { unlinkChessProfile, useChessProfile } from "../lib/profile.ts";
 
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 const PAGE_SIZE = 20;
@@ -38,6 +40,10 @@ export default function Games() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [syncingNow, setSyncingNow] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+  const [unlinkOpen, setUnlinkOpen] = useState(false);
+  const [unlinkBusy, setUnlinkBusy] = useState(false);
+  const [unlinkError, setUnlinkError] = useState("");
+  const [soon, openSoon, closeSoon] = useSoon();
   const navigate = useNavigate();
 
   // Fetch the whole list. Background polls never touch loading so the table
@@ -144,6 +150,24 @@ export default function Games() {
     setPage(1);
   }
 
+  // Unlink the chess.com account so another can be linked. Stored games
+  // and analyses are kept per handle server-side — relinking restores
+  // this library whole.
+  async function confirmUnlink() {
+    setUnlinkBusy(true);
+    setUnlinkError("");
+    try {
+      await unlinkChessProfile();
+      clearGamesCache();
+      // Full reload: resets module caches and lands on onboarding, which
+      // unlinked users are allowed to visit, to link the next account.
+      window.location.href = "/welcome";
+    } catch (e) {
+      setUnlinkError(e instanceof Error ? e.message : "unlink failed");
+      setUnlinkBusy(false);
+    }
+  }
+
   const counts = {
     all: allGames.length,
     win: allGames.filter((g) => g.result === "win").length,
@@ -178,7 +202,7 @@ export default function Games() {
           </p>
         </div>
         <div className="page-actions">
-          <button type="button" className="btn-dark">Import Game</button>
+          <button type="button" className="btn-dark" onClick={() => openSoon("Manual game import is coming soon.")}>Import Game</button>
           <div className="sync-wrap">
             <button
               type="button"
@@ -212,6 +236,23 @@ export default function Games() {
                 >
                   Sync Lichess
                 </button>
+                {username && (
+                  <>
+                    <div className="sync-sep" aria-hidden="true" />
+                    <button
+                      type="button"
+                      className="sync-item danger"
+                      role="menuitem"
+                      onClick={() => {
+                        setSyncOpen(false);
+                        setUnlinkError("");
+                        setUnlinkOpen(true);
+                      }}
+                    >
+                      Unlink @{username}…
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -320,6 +361,39 @@ export default function Games() {
           </button>
         </div>
       </div>
+      {soon && <SoonModal message={soon} onClose={closeSoon} />}
+      {unlinkOpen && (
+        <Modal title={`Unlink @${username}?`} onClose={() => !unlinkBusy && setUnlinkOpen(false)}>
+          <p>
+            This disconnects <strong>@{username}</strong>
+            {allGames.length > 0 && (
+              <> — your {allGames.length} imported game{allGames.length === 1 ? "" : "s"} and
+                analysis stay saved</>
+            )}
+            . Link this account again anytime to pick up where you left off.
+          </p>
+          {unlinkError && <p className="error">{unlinkError}</p>}
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="modal-btn-ghost"
+              disabled={unlinkBusy}
+              onClick={() => setUnlinkOpen(false)}
+            >
+              Keep account
+            </button>
+            <button
+              type="button"
+              className="modal-btn"
+              disabled={unlinkBusy}
+              onClick={confirmUnlink}
+              autoFocus
+            >
+              {unlinkBusy ? "Unlinking…" : "Unlink account"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }
